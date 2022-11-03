@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "djx-kit"
+version = "0.0.1"
+description = "Django Extras "
+packages = [{ include="djx" }]
+authors = ["David Kyalo <davidmkyalo@gmail.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+Django = ">=3.2.0"
+typing-extensions = "^4.4.0"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
