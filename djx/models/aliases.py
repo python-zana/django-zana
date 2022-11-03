@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from functools import reduce, wraps
 from operator import attrgetter
-from types import FunctionType
+from types import FunctionType, MethodType
 import typing as t
 from collections import ChainMap, abc
 from typing_extensions import Self
@@ -17,7 +17,7 @@ if t.TYPE_CHECKING:
 
 _T = t.TypeVar("_T")
 _T_Model = t.TypeVar("_T_Model", bound="ImplementsAliases", covariant=True)
-
+_T_Expr = t.Union[m.F, m.Expression, str, t.Callable[[_T_Model], t.Union[m.F, m.Expression, str]]]
 
 
 def _attribute_error_getter(msg: str):
@@ -34,7 +34,7 @@ def _attribute_error_getter(msg: str):
 def _patch_model(cls: t.Type[_T_Model]):
     conf, annotate = cls.__query_aliases__, []
     aliases = {
-        n: a.express(cls)
+        n: a.get_expression(cls)
         for n, a in conf.items()
         if not (a.annotate and annotate.append(n))
     }
@@ -84,8 +84,9 @@ class aliasfield(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
 
     name: str
     attr: str
-    expression: t.Any = None
-    annotate: bool = None
+    expression: _T_Expr
+    annotate: bool
+
     fget: t.Union[abc.Callable, bool]
     fset: t.Union[abc.Callable, bool]
     fdel: t.Union[abc.Callable, bool]
@@ -93,7 +94,7 @@ class aliasfield(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
 
     def __init__(
         self,
-        expression=None,
+        expression: _T_Expr = None,
         fget: t.Union[abc.Callable, bool] = None,
         fset: t.Union[abc.Callable, bool] = None,
         fdel: t.Union[abc.Callable, bool] = None,
@@ -114,32 +115,33 @@ class aliasfield(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
     def deleter(self, fdel: t.Callable[[_T_Model], t.NoReturn]):
         return self._evolve(fdel=fdel)
 
-    def __call__(self, expression):
+    def __call__(self, expression: _T_Expr):
         return self._evolve(expression=expression)
 
     def __repr__(self) -> str:
         attr = self.attr
         return f"{self.__class__.__name__}({self.expression!r}, {attr=!r})"
 
-    def _evolve(self, **kwargs) -> Self:
-        return self.__class__(
-            **dict(
-                expression=self.expression,
-                fget=self.fget,
-                fset=self.fset,
-                fdel=self.fdel,
-                annotate=self.annotate,
-                attr=self.attr,
-                doc=self.doc,
-            )
-            | kwargs
-        )
+    def _evolve_kwargs(self, kwargs: dict) -> dict:
+        return dict(
+            expression=self.expression,
+            fget=self.fget,
+            fset=self.fset,
+            fdel=self.fdel,
+            annotate=self.annotate,
+            attr=self.attr,
+            doc=self.doc,
+        ) | kwargs
 
-    def express(self, cls: t.Type[m.Model]):
-        if isinstance(expr := self.expression, str):
-            return m.F(expr)
-        elif isinstance(expr, FunctionType):
-            return expr(cls)
+    def _evolve(self, **kwargs):
+        return self.__class__(**self._evolve_kwargs(kwargs))
+
+    def get_expression(self, cls: t.Type[m.Model]):
+        expr = self.expression
+        if isinstance(expr, (FunctionType, staticmethod, classmethod, MethodType)):
+            expr = expr(cls)
+        if isinstance(expr, str):
+            expr = m.F(expr)
         return expr
 
     def _prepare(self, name: str):
@@ -151,12 +153,13 @@ class aliasfield(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
 
         if attr is None:
             if isinstance(expression, m.F):
-                attr = expression.name.replace("__", ".")
+                lookup = expression.name
             elif isinstance(expression, str):
-                attr = expression.replace("__", ".")
+                lookup = expression
+            attr = lookup.replace('__', '.')
 
-        if annotate and fset is True:
-            raise TypeError(f"annotated alias cannot have a setter")
+        if fset is True and not (annotate or attr) :
+            raise TypeError(f"cannot create a setter")
 
         if fget is None:
             fget = not not (annotate or attr)
@@ -218,22 +221,20 @@ class aliasfield(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
 
     def make_setter(self):
         __tracebackhide__ = True
-        attr, name, func = self.attr, self.name, self.fset
+        annotate, attr, name, func = self.annotate, self.attr, self.name, self.fset
         if func is True:
-            if attr:
+            if annotate:
+                def func(self: _T_Model, value):
+                    nonlocal name
+                    self.__dict__[name] = value
+            else:
                 *path, name = attr.split(".")
-
                 def func(self, value):
                     __tracebackhide__ = True
                     nonlocal path, name
                     obj = reduce(getattr, path, self)
                     setattr(obj, name, value)
-
-            else:
-
-                def func(self: _T_Model, value):
-                    nonlocal name
-                    self.__dict__[name] = value
+                
 
         return func or None
 
@@ -241,7 +242,6 @@ class aliasfield(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
         __tracebackhide__ = True
         func, name = self.fdel, self.name
         if func is True:
-
             def func(self: _T_Model):
                 __tracebackhide__ = True
                 nonlocal name
@@ -252,3 +252,16 @@ class aliasfield(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
 
         return func or None
 
+
+
+class annotatedfield(aliasfield[_T]):
+
+    if not t.TYPE_CHECKING:
+        def __init__(self, *a, **kw) -> None:
+            super().__init__(*a, annotate=True, **kw)
+
+    def _evolve_kwargs(self, kwargs: dict) -> Self:
+        rv = super()._evolve_kwargs(**kwargs)
+        rv.pop('annotate')
+        
+        return rv

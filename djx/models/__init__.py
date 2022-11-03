@@ -1,1 +1,1 @@
-from .aliases import aliasfield
+from .aliases import aliasfield, annotatedfield
