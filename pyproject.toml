@@ -7,12 +7,49 @@ authors = ["David Kyalo <davidmkyalo@gmail.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = ">=3.9"
 Django = ">=3.2.0"
-typing-extensions = "^4.4.0"
+typing-extensions = ">=4.4.0"
 
 [tool.poetry.dev-dependencies]
+pytest = "^7.2.0"
+pytest-asyncio = "^0.20.3"
+pytest-cov = "^4.0.0"
+mkdocs = "^1.4.2"
+mkdocs-material = "^8.5.11"
+mike = "^1.1.2"
+black = "^22.12.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = "True"
+
+
+[tool.pytest.ini_options]
+addopts = "--showlocals --cov=zana --cov-report html --cov-config pyproject.toml"
+asyncio_mode="auto"
+xfail_strict= "True"
+log_level = "DEBUG"
+python_files = "tests.py test.py test_*.py"
+python_classes = "test_* Test_*"
+python_functions = "test_*"
+
+
+
+[tool.coverage.report]
+# Here we specify plugins for coverage to be used:
+exclude_lines = [
+    "pragma: no cover",
+    "^\\s*pass\\s*$",
+    "^\\s*\\.\\.\\.\\s*$",
+    "raise NotImplementedError",
+    "if\\s+([a-zA-Z0-9_]+\\.)?TYPE_CHECKING",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
