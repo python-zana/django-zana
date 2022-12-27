@@ -3,7 +3,7 @@ name = "Django-Zana"
 version = "0.0.1"
 description = "Django Tool Kit "
 packages = [
-    { include="zana", from = "src" },
+    { include="zana" },
 ]
 authors = ["David Kyalo <davidmkyalo@gmail.com>"]
 license = "MIT"
@@ -49,7 +49,7 @@ ignore_missing_imports = "True"
 
 
 [tool.pytest.ini_options]
-addopts = "--showlocals --cov=src --cov-report html --cov-config pyproject.toml"
+addopts = "--showlocals --cov=zana --cov-report html --cov-config pyproject.toml"
 asyncio_mode="auto"
 xfail_strict= "True"
 log_level = "DEBUG"
