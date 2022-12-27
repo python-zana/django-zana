@@ -1,29 +1,42 @@
 [tool.poetry]
-name = "djx-kit"
+name = "Django-Zana"
 version = "0.0.1"
-description = "Django Extras "
-packages = [{ include="djx" }]
+description = "Django Tool Kit "
+packages = [
+    { include="zana", from = "src" },
+    { include="django_zana", from = "src" },
+]
 authors = ["David Kyalo <davidmkyalo@gmail.com>"]
 license = "MIT"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
 
 [tool.poetry.dependencies]
 python = ">=3.9"
 Django = ">=3.2.0"
 typing-extensions = ">=4.4.0"
 
-[tool.poetry.dev-dependencies]
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test.dependencies]
 pytest = "^7.2.0"
 pytest-asyncio = "^0.20.3"
-pytest-cov = "^4.0.0"
-mkdocs = "^1.4.2"
-mkdocs-material = "^8.5.11"
-mike = "^1.1.2"
-black = "^22.12.0"
+pytest-cov = {version = "^4.0.0", extras = ["toml"]}
 
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
 
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = "*"
+mkdocs-material = "*"
+mike = "*"
+mkdocstrings = {version = "*", extras = ["python"]}
 
 [tool.mypy]
 python_version = "3.9"
@@ -42,7 +55,6 @@ python_functions = "test_*"
 
 
 [tool.coverage.report]
-# Here we specify plugins for coverage to be used:
 exclude_lines = [
     "pragma: no cover",
     "^\\s*pass\\s*$",
