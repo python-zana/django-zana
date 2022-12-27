@@ -8,12 +8,15 @@ pytestmark = [
 
 ]
 
-from example.models import Author
+from example.models import Author, Book
 
 
 class test_alias:
 
     def test_basic(self):
-        obj = Author(name='John Doe', age=25)
-        obj.save()
+        author = Author.objects.create(name='John Doe', age=25)
+        book: Book = author.books.create(title='My Book', price=20, rating=4)
+
+        assert book in {*author.books.all()}
+        
         
