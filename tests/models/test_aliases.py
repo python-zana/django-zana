@@ -46,5 +46,5 @@ class test_alias:
             book.authored_by = 'My new name'
             assert book.author.name == 'My new name'
 
-        assert 0
+        # assert 0
 
