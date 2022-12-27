@@ -1,1 +1,1 @@
-from .aliases import alias, annotated
+from .aliases import alias

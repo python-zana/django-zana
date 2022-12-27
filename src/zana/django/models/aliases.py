@@ -7,10 +7,11 @@ from operator import attrgetter
 from types import FunctionType, MethodType
 from weakref import WeakSet
 
+from typing_extensions import Self
+
 from django.db import models as m
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
-from typing_extensions import Self
 
 if t.TYPE_CHECKING:
     class Model(m.Model):
@@ -207,11 +208,11 @@ class alias(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
         elif isinstance(expr, m.Field):
             expr = m.F(expr.name)
         
-        if not self.default in (_empty, None):
-            expr = Coalesce(expr, self.default)
-
         if self.field:
             expr = m.ExpressionWrapper(expr, output_field=self.field)
+
+        if not self.default in (_empty, None):
+            expr = Coalesce(expr, self.default)
 
         return expr
 
@@ -334,19 +335,3 @@ class alias(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
 
         return func or None
 
-
-# if t.TYPE_CHECKING:
-#     _aka = alias
-#     alias = t.Union[_aka[_T], property[_T]]
-
-class annotated(alias[_T]):
-
-    if not t.TYPE_CHECKING:
-        def __init__(self, *a, **kw) -> None:
-            super().__init__(*a, annotate=True, **kw)
-
-    def _evolve_kwargs(self, kwargs: dict) -> Self:
-        rv = super()._evolve_kwargs(**kwargs)
-        rv.pop('annotate')
-        
-        return rv
