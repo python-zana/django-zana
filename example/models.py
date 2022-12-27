@@ -1,5 +1,7 @@
 import typing as t
+from decimal import Decimal
 
+from typing_extensions import Self
 from zana.types.enums import IntEnum
 
 from django.db import models as m
@@ -15,26 +17,26 @@ class Rating(IntEnum):
 
 
 class Author(m.Model):
-    name = m.CharField(max_length=200)
-    age = m.IntegerField()
+    name: str = m.CharField(max_length=200)
+    age: str = m.IntegerField()
     books: 'm.manager.RelatedManager[Book]'
 
 
     def get_avg_rating(self):
-        return self.books.aggregate(avg_rating=m.Avg('books__rating', default=0))['avg_rating']
+        return self.books.aggregate(avg_rating=m.Avg('rating', default=0))['avg_rating']
 
-    avg_rating = alias(m.Avg('books__rating', default=0), get_avg_rating)
+    rating: t.Union[float, int] = alias(m.Avg('books__rating'), get_avg_rating, default=0.0)
 
 
 
 
 class Book(m.Model):
-    title = m.CharField(max_length=200)
-    price = m.DecimalField(max_digits=12, null=True, decimal_places=2)
-    rating = m.SmallIntegerField(choices=Rating.choices, null=True)
-    author = m.ForeignKey('Author', m.RESTRICT, 'books')
+    title: str = m.CharField(max_length=200)
+    price: Decimal = m.DecimalField(max_digits=12, null=True, decimal_places=2)
+    rating: int = m.SmallIntegerField(choices=Rating.choices, null=True)
+    author: Author = m.ForeignKey('Author', m.RESTRICT, related_name='books')
     
     date_published = m.DateTimeField(null=True)
 
-    author_name = alias('author__name')
+    authored_by = alias()[Self].author.name
 
