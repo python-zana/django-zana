@@ -110,8 +110,8 @@ class GenericAlias:
 
 
 
-
-class alias(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
+_base = property[_T] if t.TYPE_CHECKING else t.Generic[_T]
+class alias(_base):
 
     descriptor_class: t.ClassVar[t.Type[AliasDescriptor]] = AliasDescriptor
 
@@ -129,16 +129,16 @@ class alias(property[_T] if t.TYPE_CHECKING else t.Generic[_T]):
 
     if t.TYPE_CHECKING:
         def __new__(cls,
-        expression: _T_Expr = None,
-        getter: t.Union[abc.Callable[[_T_Model], _T], bool] = None,
-        setter: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool] = None,
-        deleter: t.Union[abc.Callable[[_T_Model], t.NoReturn], bool] = None,
-        *,
-        annotate: bool = None,
-        attr: str = None,
-        doc: str = None,
-        field: m.Field=None, 
-        default=None,
+            expression: _T_Expr = None,
+            getter: t.Union[abc.Callable[[_T_Model], _T], bool] = None,
+            setter: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool] = None,
+            deleter: t.Union[abc.Callable[[_T_Model], t.NoReturn], bool] = None,
+            *,
+            annotate: bool = None,
+            attr: str = None,
+            doc: str = None,
+            field: m.Field=None, 
+            default=None,
         ):
             return super().__new__(cls)
         

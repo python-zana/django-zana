@@ -11,6 +11,7 @@ pytestmark = [
 ]
 
 from example.models import Author, Book, Rating
+from zana.django.models import alias
 
 
 class test_alias:
@@ -28,7 +29,8 @@ class test_alias:
     def test_basic(self):
         author_0, author_1 = self.create_authors()
         author_0._b_count, author_1._b_count = 5, 3
-        
+
+        print(f'{Author.__query_aliases__=!r}\n{Book.__query_aliases__=!r}')
 
         for author in (author_0, author_1):
             self.create_books(author, author._b_count)
@@ -38,8 +40,11 @@ class test_alias:
             assert author.books.count() == author._b_count
             assert author.rating == rating
             assert author == Author.objects.get(rating=rating)
-            assert author.name == author.books.first().authored_by
-            
+            book = author.books.first()
+            assert author.name == book.authored_by
             assert {*author.books.all()} == {*Book.objects.filter(authored_by=author.name).all()}
+            book.authored_by = 'My new name'
+            assert book.author.name == 'My new name'
 
+        assert 0
 

@@ -25,8 +25,7 @@ class Author(m.Model):
     def get_avg_rating(self):
         return self.books.aggregate(avg_rating=m.Avg('rating', default=0))['avg_rating']
 
-    rating: t.Union[float, int] = alias(m.Avg('books__rating'), get_avg_rating, default=0.0)
-
+    rating: t.Union[float, int] = alias(lambda cls: m.Avg('books__rating'), get_avg_rating, default=0.0, field=m.FloatField()).getter(get_avg_rating)
 
 
 
@@ -38,5 +37,5 @@ class Book(m.Model):
     
     date_published = m.DateTimeField(null=True)
 
-    authored_by = alias()[Self].author.name
+    authored_by = alias(setter=True)[Self].author.name
 
