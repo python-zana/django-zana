@@ -4,12 +4,15 @@ from collections import ChainMap, abc
 from email.policy import default
 from functools import cached_property, reduce, update_wrapper, wraps
 from operator import attrgetter
-from types import FunctionType, MethodType
+from types import FunctionType
+from types import GenericAlias as GenericAliasType
+from types import MethodType
 from weakref import WeakSet
 
 from typing_extensions import Self
-from zana.common import lazyattr
+from zana.common import NotSet, lazyattr
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
@@ -24,7 +27,6 @@ _T_Src = t.TypeVar("_T_Src")
 _T_Model = t.TypeVar("_T_Model", bound="ImplementsAliases", covariant=True)
 _T_Expr = t.Union[Combinable, str, m.Field, 'alias', t.Callable[[_T_Model], t.Union[Combinable, str, m.Field, 'alias']]]
 
-_empty = object()
 
 def _error_attrgetter(msg: str):
     __tracebackhide__ = True
@@ -92,24 +94,31 @@ def _patch_model(cls: t.Type[_T_Model]):
 
 
 
-class ImplementsAliases(Model if t.TYPE_CHECKING else ABC):
+class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
+
+    __query_aliases__: abc.Mapping[str, 'alias']
+
     @classmethod
     def __subclasshook__(cls, sub: type):
         if cls is ImplementsAliases and issubclass(sub, m.Model):
             if isinstance(getattr(sub, "__query_aliases__", None), abc.Mapping):
                 return True
         return NotImplemented
+    
+    @classmethod
+    def prepare(cls, subclass: type[_T_Model]):
+        if not "__query_aliases__" in subclass.__dict__:
+            subclass.__query_aliases__ = ChainMap(
+                {},
+                *(
+                    m.maps[0]
+                    for b in subclass.__mro__
+                    if isinstance(m := b.__dict__.get("__query_aliases__"), ChainMap)
+                )
+            )
 
+        return cls.register(subclass)
 
-# class AliasDescriptor(property):
-
-#     field: "alias" = None
-
-#     def __init__(
-#         self, fget=None, fset=None, fdel=None, doc: str = None, *, field: "alias"
-#     ) -> None:
-#         super().__init__(fget, fset, fdel, doc)
-#         self.field = field
 
 
 class GenericAlias:
@@ -131,13 +140,11 @@ class GenericAlias:
         return self().contribute_to_class(cls, name)
 
 
-
-_base = property[_T] if t.TYPE_CHECKING else t.Generic[_T]
-class alias(_base):
-
-    descriptor_class: t.ClassVar[t.Type[lazyattr]] = lazyattr
+class alias(property if t.TYPE_CHECKING else t.Generic[_T]):
+    __class_getitem__ = classmethod(GenericAliasType)
 
     name: str
+    cache: bool
     attr: str
     expression: _T_Expr
     annotate: bool
@@ -146,7 +153,7 @@ class alias(_base):
 
     fget: t.Union[abc.Callable[[_T_Model], _T], bool]
     fset: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool]
-    fdel: t.Union[abc.Callable[[_T_Model], t.NoReturn], bool]
+    fdel: abc.Callable[[_T_Model], t.NoReturn]
     doc: str
 
     if t.TYPE_CHECKING:
@@ -154,44 +161,42 @@ class alias(_base):
             expression: _T_Expr = None,
             getter: t.Union[abc.Callable[[_T_Model], _T], bool] = None,
             setter: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool] = None,
-            deleter: t.Union[abc.Callable[[_T_Model], t.NoReturn], bool] = None,
+            deleter: abc.Callable[[_T_Model], t.NoReturn] = None,
             *,
             annotate: bool = None,
             attr: str = None,
             doc: str = None,
             field: m.Field=None, 
             default=None,
-        ):
-            return super().__new__(cls)
-        
-        def __get__(self, obj: _T_Model, typ: type[_T_Model] = None) -> t.Union[_T, Self]:
+            cache:bool=None,
+        ) -> _T | Self:
             ...
-   
-   
+        
     def __init__(
         self,
         expression: _T_Expr = None,
         getter: t.Union[abc.Callable[[_T_Model], _T], bool] = None,
         setter: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool] = None,
-        deleter: t.Union[abc.Callable[[_T_Model], t.NoReturn], bool] = None,
+        deleter: abc.Callable[[_T_Model], t.NoReturn] = None,
         *,
         annotate: bool = None,
         attr: str = None,
         doc: str = None,
         field: m.Field=None,
-        default=_empty,
+        default=NotSet,
+        cache:bool=None,
     ) -> None:
         self.annotate, self.attr, self.expression = annotate, attr, expression
         self.fget, self.fset, self.fdel, self.doc = getter, setter, deleter, doc
-        self.field, self.default = field, default
+        self.field, self.default, self.cache = field, default, cache
     
-    def getter(self, fget: t.Callable[[_T_Model], _T]):
+    def getter(self, fget: t.Callable | bool ) -> _T | Self:
         return self.evolve(getter=fget)
 
-    def setter(self, fset: t.Callable[[_T_Model, _T], t.NoReturn]):
+    def setter(self, fset: t.Callable | bool) -> _T | Self:
         return self.evolve(setter=fset)
 
-    def deleter(self, fdel: t.Callable[[_T_Model], t.NoReturn]):
+    def deleter(self, fdel: t.Callable) -> _T | Self:
         return self.evolve(deleter=fdel)
 
     def __getitem__(self, src: _T_Src) -> _T_Src:
@@ -215,9 +220,10 @@ class alias(_base):
             doc=self.doc,
             field=self.field,
             default=self.default,
+            cache=self.cache,
         ) | kwargs
 
-    def evolve(self, **kwargs) -> t.Union[_T, Self]:
+    def evolve(self, **kwargs) -> _T | Self:
         return self.__class__(**self._evolve_kwargs(kwargs))
 
     def get_expression(self, cls: t.Type[m.Model]):
@@ -233,17 +239,14 @@ class alias(_base):
         if self.field:
             expr = m.ExpressionWrapper(expr, output_field=self.field)
 
-        if not self.default in (_empty, None):
+        if not self.default in (NotSet, None):
             expr = Coalesce(expr, self.default)
 
         return expr
 
-    def _prepare(self, name: str):
-        annotate, attr, expression = self.annotate, self.attr, self.expression
+    def _prepare(self, cls: t.Type[_T_Model], name: str):
+        annotate, attr, cache, expression = self.annotate, self.attr, self.cache, self.expression
         fget, fset, fdel = self.fget, self.fset, self.fdel
-
-        if annotate is None:
-            annotate = not (fget or fset)
 
         if attr is None:
             lookup = attr
@@ -251,34 +254,35 @@ class alias(_base):
                 lookup = expression.name
             elif isinstance(expression, str):
                 lookup = expression
+            elif isinstance(expression, m.Field):
+                lookup = expression.attname
             attr = lookup and lookup.replace('__', '.')
 
-        if fset is True and (not attr or annotate):
-            raise TypeError(f"cannot create a setter")
+        annotate = not (fget or fset or attr) if annotate is None else not not annotate
+
+        if cache is None:
+            cache = annotate or not attr
+
+        if fset is True and (not attr or annotate or cache):
+            if not attr:
+                msg = f"Cannot resolve attribute for implicit `setter`. " \
+                    f"Either provide the `attr` name or a custom `setter`"
+            else:
+                msg = (
+                    "%s aliases cannot have an implicit `setter`. "
+                    "Either provide custom `setter` or set `%s` to `False`." 
+                ) % (('Annotated', 'annotate') if annotate else ('Cached', 'cache'))
+            raise ImproperlyConfigured(f"alias {name!r} on {cls.__name__!r}. {msg}")
 
         if fget is None:
-            fget = not not (annotate or attr)
+            fget = not not (annotate or attr or cache)
 
-        # if fset is None:
-        #     fset = not not annotate
-
-        # if fdel is None:
-        #     fdel = not not annotate
-
-        self.annotate, self.attr, self.expression = annotate, attr, expression
+        self.annotate, self.attr, self.cache, self.expression = annotate, attr, cache, expression
         self.fget, self.fset, self.fdel, self.name = fget, fset, fdel, name
 
     def contribute_to_class(self, cls: t.Type[_T_Model], name: str):
-        self._prepare(name)
-        if not "__query_aliases__" in cls.__dict__:
-            cls.__query_aliases__ = ChainMap(
-                {},
-                *(
-                    b.__query_aliases__.maps[0]
-                    for b in cls.__mro__
-                    if "__query_aliases__" in b.__dict__
-                ),
-            )
+        cls = ImplementsAliases.prepare(cls)
+        self._prepare(cls, name)
         cls.__query_aliases__[name], descriptor = self, self.create_descriptor(cls)
 
         if hasattr(descriptor, '__set_name__'):
@@ -287,54 +291,41 @@ class alias(_base):
         setattr(cls, name, descriptor)
 
     def create_descriptor(self, cls):
-        ret = self.descriptor_class(
+        ret = (lazyattr if self.cache else property)(
             self.make_getter(),
             self.make_setter(),
             self.make_deleter(),
             doc=self.doc,
         )
+        
         return ret
 
     def make_getter(self):
-        __tracebackhide__ = True
-        annotate, attr, name, fget, default = self.annotate, self.attr, self.name, self.fget, self.default
+        attr, default, fget = self.attr, self.default, self.fget
         if fget is True:
-            fget = (attr and attrgetter(attr)) or (annotate and _error_attrgetter(name)) or _none_attrgetter()
-            default_func, default = fget, self.default
-
+            fget = (attr and attrgetter(attr)) or _error_attrgetter(self.name)
+        
+        if fget and not default is NotSet:
+            fget_ = fget
+            @wraps(fget_)
             def fget(self):
-                __tracebackhide__ = True
-                nonlocal name, default, default_func
+                nonlocal default, fget_
                 try:
-                    val = default_func(self)
+                    val = fget_(self)
                 except AttributeError:
                     val = None
                 return default if val is None else val
 
-        # if annotate:
-        #     ann_func = fget
-
-        #     def fget(self):
-        #         __tracebackhide__ = True
-        #         nonlocal name, ann_func
-        #         try:
-        #             return self.__dict__[name]
-        #         except KeyError:
-        #             return ann_func(self)
-
         return fget or None
 
     def make_setter(self):
-        __tracebackhide__ = True
-        attr, name, func = self.attr, self.name, self.fset
+        attr, func = self.attr, self.fset
         if func is True:
-            *path, leaf = attr.split(".")
+            *path, name = attr.split(".")
             def func(self: m.Model, value):
-                __tracebackhide__ = True
-                nonlocal path, leaf, name
-                self.__dict__.pop(name, ...)
+                nonlocal path, name
                 obj = reduce(getattr, path, self) if path else self
-                setattr(obj, leaf, value)
+                setattr(obj, name, value)
             
         return func or None
 

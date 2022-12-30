@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "Django-Zana"
-version = "0.1.0a0"
+version = "0.1.0a1"
 description = "Django Tool Kit "
 packages = [
     { include="zana" },
@@ -8,8 +8,8 @@ packages = [
 authors = ["David Kyalo <davidmkyalo@gmail.com>"]
 license = "MIT"
 classifiers = [
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
 ]
 
 [build-system]
@@ -18,7 +18,7 @@ build-backend = "poetry.core.masonry.api"
 
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4.0"
+python = ">=3.10,<4.0"
 Django = ">=3.2.0"
 typing-extensions = ">=4.4.0"
 zana = ">=0.1.1,<0.2.0"
@@ -44,7 +44,7 @@ mike = "*"
 mkdocstrings = "*"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 ignore_missing_imports = "True"
 
 
@@ -65,7 +65,7 @@ exclude_lines = [
     "^\\s*pass\\s*$",
     "^\\s*\\.\\.\\.\\s*$",
     "raise NotImplementedError",
-    "if\\s+([a-zA-Z0-9_]+\\.)?TYPE_CHECKING",
+    "if\\s+([a-zA-Z0-9_]+\\.)?TYPE_CHECKING\\s*:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
