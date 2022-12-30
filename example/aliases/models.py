@@ -82,8 +82,9 @@ class Publisher(BaseModel):
     books: 'm.manager.RelatedManager[Book]'
 
     rating = alias[float | int](m.Avg('books__rating'), annotate=True, default=0.0, field=m.FloatField())
+    
     @rating.getter
-    def rating(self):
+    def rating(self) -> int | float:
         return self.books.aggregate(avg_rating=m.Avg('rating', default=0))['avg_rating']
     
 

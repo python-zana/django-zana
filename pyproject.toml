@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "Django-Zana"
-version = "0.1.0a1"
+version = "0.1.1"
 description = "Django Tool Kit "
 packages = [
     { include="zana" },

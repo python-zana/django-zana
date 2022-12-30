@@ -10,7 +10,7 @@ from types import MethodType
 from weakref import WeakSet
 
 from typing_extensions import Self
-from zana.common import NotSet, lazyattr
+from zana.common import NotSet, cached_attr
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
@@ -140,7 +140,7 @@ class GenericAlias:
         return self().contribute_to_class(cls, name)
 
 
-class alias(property if t.TYPE_CHECKING else t.Generic[_T]):
+class alias(t.Generic[_T]):
     __class_getitem__ = classmethod(GenericAliasType)
 
     name: str
@@ -275,7 +275,7 @@ class alias(property if t.TYPE_CHECKING else t.Generic[_T]):
             raise ImproperlyConfigured(f"alias {name!r} on {cls.__name__!r}. {msg}")
 
         if fget is None:
-            fget = not not (annotate or attr or cache)
+            fget = not not (annotate or attr)
 
         self.annotate, self.attr, self.cache, self.expression = annotate, attr, cache, expression
         self.fget, self.fset, self.fdel, self.name = fget, fset, fdel, name
@@ -291,7 +291,7 @@ class alias(property if t.TYPE_CHECKING else t.Generic[_T]):
         setattr(cls, name, descriptor)
 
     def create_descriptor(self, cls):
-        ret = (lazyattr if self.cache else property)(
+        ret = (cached_attr if self.cache else property)(
             self.make_getter(),
             self.make_setter(),
             self.make_deleter(),
