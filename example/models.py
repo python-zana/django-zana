@@ -5,6 +5,7 @@ from typing_extensions import Self
 from zana.types.enums import IntEnum
 
 from django.db import models as m
+from django.utils import timezone
 from zana.django.models import alias
 
 
@@ -35,7 +36,13 @@ class Book(m.Model):
     rating: int = m.SmallIntegerField(choices=Rating.choices, null=True)
     author: Author = m.ForeignKey('Author', m.RESTRICT, related_name='books')
     
-    date_published = m.DateTimeField(null=True)
+    date_published = m.DateTimeField(null=True, default=timezone.now)
+
+    def set_published_on(self, val):
+        self.date_published = val
+
+    published_on = alias(date_published, annotate=True).setter(set_published_on)
 
     authored_by = alias(setter=True)[Self].author.name
+    
 

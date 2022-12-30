@@ -852,14 +852,14 @@ watchmedo = ["PyYAML (>=3.10)"]
 
 [[package]]
 name = "zana"
-version = "0.0.3"
+version = "0.1.1"
 description = "general utility functions and types"
 category = "main"
 optional = false
 python-versions = ">=3.9,<4.0"
 files = [
-    {file = "zana-0.0.3-py3-none-any.whl", hash = "sha256:6f2a9aff281489f03f9d2169b943d476aaa51448027c8551e9763729a50c53e8"},
-    {file = "zana-0.0.3.tar.gz", hash = "sha256:a98fe7059a70b1b9bda6b9034aa94ab412df8cf5e71ab0bd92b11de095febb3b"},
+    {file = "zana-0.1.1-py3-none-any.whl", hash = "sha256:feeecae3e92269d42f39481b0e0a0f50208e80380cf98f425d74b6fd7ae87d94"},
+    {file = "zana-0.1.1.tar.gz", hash = "sha256:c46d9b556c290e7a56ef353e3064a0e29827e3248d9029752c109f0ef3af394e"},
 ]
 
 [package.dependencies]
@@ -884,4 +884,4 @@ testing = ["flake8 (<5)", "func-timeout", "jaraco.functools", "jaraco.itertools"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.9,<4.0"
-content-hash = "2d2b3f635218e4d96914870ee4c7aefa891eb65176cbe52c6b1cd61840c222ec"
+content-hash = "3542bcf7e778e5e56635294b2f0dedc879fb3b5d7f403f047676608af71a02bc"

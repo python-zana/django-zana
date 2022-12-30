@@ -2,12 +2,13 @@ import typing as t
 from abc import ABC, abstractmethod
 from collections import ChainMap, abc
 from email.policy import default
-from functools import cached_property, reduce, wraps
+from functools import cached_property, reduce, update_wrapper, wraps
 from operator import attrgetter
 from types import FunctionType, MethodType
 from weakref import WeakSet
 
 from typing_extensions import Self
+from zana.common import lazyattr
 
 from django.db import models as m
 from django.db.models.expressions import Combinable
@@ -25,7 +26,7 @@ _T_Expr = t.Union[Combinable, str, m.Field, 'alias', t.Callable[[_T_Model], t.Un
 
 _empty = object()
 
-def _attribute_error_getter(msg: str):
+def _error_attrgetter(msg: str):
     __tracebackhide__ = True
 
     def fget(self):
@@ -35,38 +36,59 @@ def _attribute_error_getter(msg: str):
 
     return fget
 
+def _none_attrgetter():
+    def fget(self):
+        pass
+    return fget
+
 
 def _patch_model(cls: t.Type[_T_Model]):
     conf = cls.__query_aliases__
+    if conf:
+        aliases: dict = None
+        annotations = {n: m.F(n) for n, a in conf.items() if a.annotate}
 
-    if not conf:
-        return
-
-    aliases: dict = None
-    annotations = {n: m.F(n) for n, a in conf.items() if a.annotate}
-
-    def aka_init():
-        nonlocal aliases
-        if aliases is None:
-            aliases = { n: a.get_expression(cls) for n, a in conf.items() }
-        else:
-            raise ValueError('No second calls')
-        return aliases
-
-    for man in cls._meta.managers:
-        if not getattr(man.get_queryset, "_loads_aliases_", None):
-            fn = man.get_queryset.__func__
-            if annotations:
-                def get_queryset():
-                    nonlocal fn, man, aliases, annotations
-                    return fn(man).alias(**aliases or aka_init()).annotate(**annotations)
+        def aka_init():
+            nonlocal aliases
+            if aliases is None:
+                aliases = { n: a.get_expression(cls) for n, a in conf.items() }
             else:
-                def get_queryset():
-                    nonlocal fn, man, aliases
-                    return fn(man).alias(**aliases or aka_init())
+                raise ValueError('No second calls')
+            return aliases
+        
+        if not getattr(cls.refresh_from_db, "_loads_aliases_", None):
+            orig_refresh_from_db = cls.refresh_from_db
+            @wraps(orig_refresh_from_db)
+            def refresh_from_db(self, fields=None):
+                aka = aliases.keys()
+                if fields:
+                    fields = set(fields)
+                    aka = aka & fields
+                    fields -= aka 
 
-            get_queryset._loads_aliases_ = True
-            man.get_queryset = get_queryset
+                for a in aka:
+                    delattr(self, a)
+                orig_refresh_from_db(self, fields)
+
+            refresh_from_db._loads_aliases_ = True
+            cls.refresh_from_db = refresh_from_db
+        
+        for man in cls._meta.managers:
+            if not getattr(man.get_queryset, "_loads_aliases_", None):
+                orig_get_qs = man.get_queryset.__func__
+                if annotations:
+                    @wraps(orig_get_qs)
+                    def get_queryset():
+                        nonlocal orig_get_qs, man, aliases, annotations
+                        return orig_get_qs(man).alias(**aliases or aka_init()).annotate(**annotations)
+                else:
+                    @wraps(orig_get_qs)
+                    def get_queryset():
+                        nonlocal orig_get_qs, man, aliases
+                        return orig_get_qs(man).alias(**aliases or aka_init())
+
+                get_queryset._loads_aliases_ = True
+                man.get_queryset = get_queryset
 
 
 
@@ -79,15 +101,15 @@ class ImplementsAliases(Model if t.TYPE_CHECKING else ABC):
         return NotImplemented
 
 
-class AliasDescriptor(property):
+# class AliasDescriptor(property):
 
-    field: "alias" = None
+#     field: "alias" = None
 
-    def __init__(
-        self, fget=None, fset=None, fdel=None, doc: str = None, *, field: "alias"
-    ) -> None:
-        super().__init__(fget, fset, fdel, doc)
-        self.field = field
+#     def __init__(
+#         self, fget=None, fset=None, fdel=None, doc: str = None, *, field: "alias"
+#     ) -> None:
+#         super().__init__(fget, fset, fdel, doc)
+#         self.field = field
 
 
 class GenericAlias:
@@ -113,7 +135,7 @@ class GenericAlias:
 _base = property[_T] if t.TYPE_CHECKING else t.Generic[_T]
 class alias(_base):
 
-    descriptor_class: t.ClassVar[t.Type[AliasDescriptor]] = AliasDescriptor
+    descriptor_class: t.ClassVar[t.Type[lazyattr]] = lazyattr
 
     name: str
     attr: str
@@ -231,17 +253,17 @@ class alias(_base):
                 lookup = expression
             attr = lookup and lookup.replace('__', '.')
 
-        if fset is True and not (annotate or attr) :
+        if fset is True and (not attr or annotate):
             raise TypeError(f"cannot create a setter")
 
         if fget is None:
             fget = not not (annotate or attr)
 
-        if fset is None:
-            fset = not not annotate
+        # if fset is None:
+        #     fset = not not annotate
 
-        if fdel is None:
-            fdel = not not annotate
+        # if fdel is None:
+        #     fdel = not not annotate
 
         self.annotate, self.attr, self.expression = annotate, attr, expression
         self.fget, self.fset, self.fdel, self.name = fget, fset, fdel, name
@@ -257,9 +279,12 @@ class alias(_base):
                     if "__query_aliases__" in b.__dict__
                 ),
             )
+        cls.__query_aliases__[name], descriptor = self, self.create_descriptor(cls)
 
-        cls.__query_aliases__[name] = self
-        setattr(cls, name, self.create_descriptor(cls))
+        if hasattr(descriptor, '__set_name__'):
+            descriptor.__set_name__(cls, name)
+
+        setattr(cls, name, descriptor)
 
     def create_descriptor(self, cls):
         ret = self.descriptor_class(
@@ -267,7 +292,6 @@ class alias(_base):
             self.make_setter(),
             self.make_deleter(),
             doc=self.doc,
-            field=self,
         )
         return ret
 
@@ -275,63 +299,56 @@ class alias(_base):
         __tracebackhide__ = True
         annotate, attr, name, fget, default = self.annotate, self.attr, self.name, self.fget, self.default
         if fget is True:
-            fget = (attr and attrgetter(attr)) or (
-                annotate and _attribute_error_getter(name)
-            )
-        
-        if not default is _empty:
+            fget = (attr and attrgetter(attr)) or (annotate and _error_attrgetter(name)) or _none_attrgetter()
             default_func, default = fget, self.default
 
             def fget(self):
                 __tracebackhide__ = True
                 nonlocal name, default, default_func
-                val = default_func(self)
+                try:
+                    val = default_func(self)
+                except AttributeError:
+                    val = None
                 return default if val is None else val
 
+        # if annotate:
+        #     ann_func = fget
 
-        if annotate:
-            ann_func = fget
-
-            def fget(self):
-                __tracebackhide__ = True
-                nonlocal name, ann_func
-                try:
-                    return self.__dict__[name]
-                except KeyError:
-                    return ann_func(self)
+        #     def fget(self):
+        #         __tracebackhide__ = True
+        #         nonlocal name, ann_func
+        #         try:
+        #             return self.__dict__[name]
+        #         except KeyError:
+        #             return ann_func(self)
 
         return fget or None
 
     def make_setter(self):
         __tracebackhide__ = True
-        annotate, attr, name, func = self.annotate, self.attr, self.name, self.fset
+        attr, name, func = self.attr, self.name, self.fset
         if func is True:
-            if annotate:
-                def func(self: _T_Model, value):
-                    nonlocal name
-                    self.__dict__[name] = value
-            else:
-                *path, name = attr.split(".")
-                def func(self, value):
-                    __tracebackhide__ = True
-                    nonlocal path, name
-                    obj = reduce(getattr, path, self)
-                    setattr(obj, name, value)
-                
-
+            *path, leaf = attr.split(".")
+            def func(self: m.Model, value):
+                __tracebackhide__ = True
+                nonlocal path, leaf, name
+                self.__dict__.pop(name, ...)
+                obj = reduce(getattr, path, self)
+                setattr(obj, leaf, value)
+            
         return func or None
 
     def make_deleter(self):
-        __tracebackhide__ = True
-        func, name = self.fdel, self.name
-        if func is True:
-            def func(self: _T_Model):
-                __tracebackhide__ = True
-                nonlocal name
-                try:
-                    del self.__dict__[name]
-                except KeyError:
-                    raise AttributeError(name)
+        # __tracebackhide__ = True
+        # func, name = self.fdel, self.name
+        # if func is True:
+        #     def func(self: _T_Model):
+        #         __tracebackhide__ = True
+        #         nonlocal name
+        #         try:
+        #             del self.__dict__[name]
+        #         except KeyError:
+        #             raise AttributeError(name)
 
-        return func or None
+        return self.fdel
 

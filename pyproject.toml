@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "Django-Zana"
-version = "0.0.3"
+version = "0.1.0a0"
 description = "Django Tool Kit "
 packages = [
     { include="zana" },
@@ -21,7 +21,7 @@ build-backend = "poetry.core.masonry.api"
 python = ">=3.9,<4.0"
 Django = ">=3.2.0"
 typing-extensions = ">=4.4.0"
-zana = ">=0.0.2,<0.1.0"
+zana = ">=0.1.1,<0.2.0"
 
 
 [tool.poetry.group.test]
