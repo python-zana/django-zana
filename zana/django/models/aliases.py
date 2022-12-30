@@ -69,12 +69,12 @@ def _patch_model(cls: t.Type[_T_Model]):
         if not getattr(cls.refresh_from_db, "_loads_aliases_", None):
             orig_refresh_from_db = cls.refresh_from_db
             @wraps(orig_refresh_from_db)
-            def refresh_from_db(self, fields=None):
+            def refresh_from_db(self, using=None, fields=None):
                 nonlocal orig_refresh_from_db
                 
                 if fields:
                     fields = list(fields)
-                    aliases = [n for n in conf if (n in fields and not fields.remove(n))]
+                    aliases = (n for n in conf if n in fields and None is fields.remove(n))
                 else:
                     aliases = (n for n,a in conf.items() if a.cache)
 
@@ -82,7 +82,7 @@ def _patch_model(cls: t.Type[_T_Model]):
                     with suppress(AttributeError):
                         delattr(self, aka)
                         
-                orig_refresh_from_db(self, fields)
+                orig_refresh_from_db(self, using, fields)
 
             refresh_from_db._loads_aliases_ = True
             cls.refresh_from_db = refresh_from_db
