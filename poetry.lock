@@ -828,14 +828,14 @@ watchmedo = ["PyYAML (>=3.10)"]
 
 [[package]]
 name = "zana"
-version = "0.1.2"
+version = "0.1.3"
 description = "general utility functions and types"
 category = "main"
 optional = false
 python-versions = ">=3.9,<4.0"
 files = [
-    {file = "zana-0.1.2-py3-none-any.whl", hash = "sha256:553e69c5828b3d5c7887c90df9c2fa1d83a41f26f615c23e0ce0f9ccbb7ea6ff"},
-    {file = "zana-0.1.2.tar.gz", hash = "sha256:cc5c254383d73bd4cca12edf086b58ca795ca9dfb523940f4256f83831ff588f"},
+    {file = "zana-0.1.3-py3-none-any.whl", hash = "sha256:572a8276f5415d7d419d6e65f36cac4a0d1ffa3a1f713cb2b057544f9e134802"},
+    {file = "zana-0.1.3.tar.gz", hash = "sha256:ffb842294351d8aa7a7cbd95bd78efb1f5c704e36cca863a48631de4f966f461"},
 ]
 
 [package.dependencies]
@@ -844,4 +844,4 @@ typing-extensions = ">=4.4.0,<5.0.0"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<4.0"
-content-hash = "604040d1421d058da6ad389f80b0af74572068254d926020d376b14042713fc1"
+content-hash = "61254109e85039092806ff748db90e7083b6dbb98368ac6d1da2d750d6b4702c"

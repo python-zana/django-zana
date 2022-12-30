@@ -2,13 +2,11 @@ import typing as t
 from abc import ABC, abstractmethod
 from collections import ChainMap, abc
 from contextlib import suppress
-from email.policy import default
-from functools import cached_property, reduce, update_wrapper, wraps
+from functools import reduce, wraps
 from operator import attrgetter
 from types import FunctionType
 from types import GenericAlias as GenericAliasType
 from types import MethodType
-from weakref import WeakSet
 
 from typing_extensions import Self
 from zana.common import NotSet, cached_attr
@@ -18,27 +16,52 @@ from django.db import models as m
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
 
-if t.TYPE_CHECKING:
-    class Model(m.Model):
-        __query_aliases__: t.Final[t.ChainMap[str, "alias"]] = ...
-
-
 _T = t.TypeVar("_T")
 _T_Src = t.TypeVar("_T_Src")
 _T_Model = t.TypeVar("_T_Model", bound="ImplementsAliases", covariant=True)
 _T_Expr = t.Union[Combinable, str, m.Field, 'alias', t.Callable[[_T_Model], t.Union[Combinable, str, m.Field, 'alias']]]
 
 
+def get_query_aliases(model: type[_T_Model] | _T_Model, default=None) -> abc.Mapping[str, 'alias'] | None:
+    return getattr(model, '__query_aliases__', default)
+
+
+def _patch_queryset():
+    from django.db.models.query import QuerySet
+    if not getattr(QuerySet.annotate, "_loads_aliases_", None):
+        orig_annotate = QuerySet.annotate
+
+        @wraps(orig_annotate)
+        def annotate(self: QuerySet[_T_Model], *args, **kwds):
+            nonlocal orig_annotate
+            if aliases := get_query_aliases(self.model):
+                args = [
+                    a for a in args 
+                    if not (
+                        (n := a if isinstance(a, str) else a.name if isinstance(a, m.F) else None) 
+                            and n in aliases 
+                                and kwds.setdefault(n, m.F(n))
+                    ) 
+                ]
+            return orig_annotate(self, *args, **kwds)
+
+        annotate._loads_aliases_ = True
+        QuerySet.annotate = annotate
+
+
+
 def _patch_model(cls: t.Type[_T_Model]):
-    conf = cls.__query_aliases__
-    if conf:
+    conf = get_query_aliases(cls)
+    if not conf is None:
+        _patch_queryset()
+
         aliases: dict = None
-        annotations = {n: m.F(n) for n, a in conf.items() if a.annotate}
+        annotations = *(a.name for a in conf.values() if a.annotate),
 
         def aka_init():
             nonlocal aliases
             if aliases is None:
-                aliases = { n: a.get_expression(cls) for n, a in conf.items() }
+                aliases = { a.name: a.get_expression(cls) for a in conf.values() }
             else:
                 raise ValueError('No second calls')
             return aliases
@@ -47,16 +70,17 @@ def _patch_model(cls: t.Type[_T_Model]):
             orig_refresh_from_db = cls.refresh_from_db
             @wraps(orig_refresh_from_db)
             def refresh_from_db(self, fields=None):
-                nonlocal aliases, orig_refresh_from_db
-                aka = {n for n,a in conf.items() if a.cache}
-                if fields:
-                    fields = set(fields)
-                    aka = aka & fields
-                    fields.difference_update(conf.keys())
+                nonlocal orig_refresh_from_db
                 
-                for a in aka:
+                if fields:
+                    fields = list(fields)
+                    aliases = [n for n in conf if (n in fields and not fields.remove(n))]
+                else:
+                    aliases = (n for n,a in conf.items() if a.cache)
+
+                for aka in aliases:
                     with suppress(AttributeError):
-                        delattr(self, a)
+                        delattr(self, aka)
                         
                 orig_refresh_from_db(self, fields)
 
@@ -70,7 +94,7 @@ def _patch_model(cls: t.Type[_T_Model]):
                     @wraps(orig_get_qs)
                     def get_queryset():
                         nonlocal orig_get_qs, man, aliases, annotations
-                        return orig_get_qs(man).alias(**aliases or aka_init()).annotate(**annotations)
+                        return orig_get_qs(man).alias(**aliases or aka_init()).annotate(*annotations)
                 else:
                     @wraps(orig_get_qs)
                     def get_queryset():
