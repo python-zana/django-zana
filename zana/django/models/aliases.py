@@ -1,6 +1,7 @@
 import typing as t
 from abc import ABC, abstractmethod
 from collections import ChainMap, abc
+from contextlib import suppress
 from email.policy import default
 from functools import cached_property, reduce, update_wrapper, wraps
 from operator import attrgetter
@@ -28,22 +29,6 @@ _T_Model = t.TypeVar("_T_Model", bound="ImplementsAliases", covariant=True)
 _T_Expr = t.Union[Combinable, str, m.Field, 'alias', t.Callable[[_T_Model], t.Union[Combinable, str, m.Field, 'alias']]]
 
 
-def _error_attrgetter(msg: str):
-    __tracebackhide__ = True
-
-    def fget(self):
-        nonlocal msg
-        __tracebackhide__ = True
-        raise AttributeError(msg)
-
-    return fget
-
-def _none_attrgetter():
-    def fget(self):
-        pass
-    return fget
-
-
 def _patch_model(cls: t.Type[_T_Model]):
     conf = cls.__query_aliases__
     if conf:
@@ -62,14 +47,17 @@ def _patch_model(cls: t.Type[_T_Model]):
             orig_refresh_from_db = cls.refresh_from_db
             @wraps(orig_refresh_from_db)
             def refresh_from_db(self, fields=None):
-                aka = aliases.keys()
+                nonlocal aliases, orig_refresh_from_db
+                aka = {n for n,a in conf.items() if a.cache}
                 if fields:
                     fields = set(fields)
                     aka = aka & fields
-                    fields -= aka 
-
+                    fields.difference_update(conf.keys())
+                
                 for a in aka:
-                    delattr(self, a)
+                    with suppress(AttributeError):
+                        delattr(self, a)
+                        
                 orig_refresh_from_db(self, fields)
 
             refresh_from_db._loads_aliases_ = True
@@ -275,7 +263,7 @@ class alias(t.Generic[_T]):
             raise ImproperlyConfigured(f"alias {name!r} on {cls.__name__!r}. {msg}")
 
         if fget is None:
-            fget = not not (annotate or attr)
+            fget = not not attr
 
         self.annotate, self.attr, self.cache, self.expression = annotate, attr, cache, expression
         self.fget, self.fset, self.fdel, self.name = fget, fset, fdel, name
@@ -303,7 +291,7 @@ class alias(t.Generic[_T]):
     def make_getter(self):
         attr, default, fget = self.attr, self.default, self.fget
         if fget is True:
-            fget = (attr and attrgetter(attr)) or _error_attrgetter(self.name)
+            fget = (attr and attrgetter(attr)) or None
         
         if fget and not default is NotSet:
             fget_ = fget
