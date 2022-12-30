@@ -333,7 +333,7 @@ class alias(_base):
                 __tracebackhide__ = True
                 nonlocal path, leaf, name
                 self.__dict__.pop(name, ...)
-                obj = reduce(getattr, path, self)
+                obj = reduce(getattr, path, self) if path else self
                 setattr(obj, leaf, value)
             
         return func or None
