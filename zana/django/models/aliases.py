@@ -26,13 +26,13 @@ def get_query_aliases(model: type[_T_Model] | _T_Model, default=None) -> abc.Map
     return getattr(model, '__query_aliases__', default)
 
 
-def _patch_queryset():
-    from django.db.models.query import QuerySet
-    if not getattr(QuerySet.annotate, "_loads_aliases_", None):
-        orig_annotate = QuerySet.annotate
+def _patch_queryset(cls: type[m.QuerySet[_T_Model]]):
+
+    if not getattr(cls.annotate, "_loads_aliases_", None):
+        orig_annotate = cls.annotate
 
         @wraps(orig_annotate)
-        def annotate(self: QuerySet[_T_Model], *args, **kwds):
+        def annotate(self: cls[_T_Model], *args, **kwds):
             nonlocal orig_annotate
             if aliases := get_query_aliases(self.model):
                 args = [
@@ -46,18 +46,15 @@ def _patch_queryset():
             return orig_annotate(self, *args, **kwds)
 
         annotate._loads_aliases_ = True
-        QuerySet.annotate = annotate
+        cls.annotate = annotate
 
 
 
 def _patch_model(cls: t.Type[_T_Model]):
     conf = get_query_aliases(cls)
     if not conf is None:
-        _patch_queryset()
-
         aliases: dict = None
         annotations = *(a.name for a in conf.values() if a.annotate),
-
         def aka_init():
             nonlocal aliases
             if aliases is None:
@@ -88,6 +85,8 @@ def _patch_model(cls: t.Type[_T_Model]):
             cls.refresh_from_db = refresh_from_db
         
         for man in cls._meta.managers:
+            if hasattr(man, '_queryset_class'):
+                _patch_queryset(man._queryset_class)
             if not getattr(man.get_queryset, "_loads_aliases_", None):
                 orig_get_qs = man.get_queryset.__func__
                 if annotations:
@@ -162,6 +161,9 @@ class alias(t.Generic[_T]):
     annotate: bool
     field: t.Optional[m.Field]
     default: t.Any
+    verbose_name: str 
+    order_field: t.Any
+    # register: bool
 
     fget: t.Union[abc.Callable[[_T_Model], _T], bool]
     fset: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool]
@@ -181,6 +183,8 @@ class alias(t.Generic[_T]):
             field: m.Field=None, 
             default=None,
             cache:bool=None,
+        verbose_name: str=None,
+        order_field: t.Any=None,
         ) -> _T | Self:
             ...
         
@@ -197,10 +201,13 @@ class alias(t.Generic[_T]):
         field: m.Field=None,
         default=NotSet,
         cache:bool=None,
+        verbose_name: str=None,
+        order_field: t.Any=None,
     ) -> None:
         self.annotate, self.attr, self.expression = annotate, attr, expression
         self.fget, self.fset, self.fdel, self.doc = getter, setter, deleter, doc
         self.field, self.default, self.cache = field, default, cache
+        self.verbose_name, self.order_field = verbose_name, order_field
     
     def getter(self, fget: t.Callable | bool ) -> _T | Self:
         return self.evolve(getter=fget)
@@ -233,6 +240,8 @@ class alias(t.Generic[_T]):
             field=self.field,
             default=self.default,
             cache=self.cache,
+            verbose_name=self.verbose_name,
+            order_field=self.order_field,
         ) | kwargs
 
     def evolve(self, **kwargs) -> _T | Self:
@@ -299,7 +308,12 @@ class alias(t.Generic[_T]):
 
         if hasattr(descriptor, '__set_name__'):
             descriptor.__set_name__(cls, name)
+        if self.verbose_name:
+            descriptor.short_description = self.verbose_name
 
+        if self.order_field:
+            descriptor.admin_order_field = self.order_field
+        
         setattr(cls, name, descriptor)
 
     def create_descriptor(self, cls):
