@@ -48,17 +48,41 @@ def _patch_queryset(cls: type[m.QuerySet[_T_Model]]):
         annotate._loads_aliases_ = True
         cls.annotate = annotate
 
+    if not getattr(cls.alias, "_loads_aliases_", None):
+        orig_alias = cls.alias
+
+        @wraps(orig_alias)
+        def alias(self: cls[_T_Model], *args, **kwds):
+            nonlocal orig_alias
+            if aliases := get_query_aliases(model := self.model):
+                annotate = []
+                args = [
+                    a for a in args 
+                    if not (
+                        (n := a if isinstance(a, str) else a.name if isinstance(a, m.F) else None) 
+                            and n in aliases 
+                                and (kwds.setdefault(n, (aka := aliases[n]).get_expression(model)), aka.annotate and annotate.append(n))
+                    ) 
+                ]
+                if annotate:
+                    return orig_alias(self, *args, **kwds).annotate(*annotate)
+            
+            return orig_alias(self, *args, **kwds)
+
+        alias._loads_aliases_ = True
+        cls.alias = alias
+
 
 
 def _patch_model(cls: t.Type[_T_Model]):
     conf = get_query_aliases(cls)
     if not conf is None:
         aliases: dict = None
-        annotations = *(a.name for a in conf.values() if a.annotate),
+        annotations = *(a.name for a in conf.values() if a.annotate and a.register),
         def aka_init():
             nonlocal aliases
             if aliases is None:
-                aliases = { a.name: a.get_expression(cls) for a in conf.values() }
+                aliases = { a.name: a.get_expression(cls) for a in conf.values() if a.register }
             else:
                 raise ValueError('No second calls')
             return aliases
@@ -85,8 +109,10 @@ def _patch_model(cls: t.Type[_T_Model]):
             cls.refresh_from_db = refresh_from_db
         
         for man in cls._meta.managers:
-            if hasattr(man, '_queryset_class'):
-                _patch_queryset(man._queryset_class)
+            for n in ('queryset_class', '_queryset_class'):
+                if isinstance(qs := getattr(man, n, None), type) and issubclass(qs, m.QuerySet):
+                    _patch_queryset(qs)
+                    
             if not getattr(man.get_queryset, "_loads_aliases_", None):
                 orig_get_qs = man.get_queryset.__func__
                 if annotations:
@@ -163,8 +189,8 @@ class alias(t.Generic[_T]):
     default: t.Any
     verbose_name: str 
     order_field: t.Any
-    # register: bool
-
+    register: bool
+    
     fget: t.Union[abc.Callable[[_T_Model], _T], bool]
     fset: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool]
     fdel: abc.Callable[[_T_Model], t.NoReturn]
@@ -183,8 +209,9 @@ class alias(t.Generic[_T]):
             field: m.Field=None, 
             default=None,
             cache:bool=None,
-        verbose_name: str=None,
-        order_field: t.Any=None,
+            verbose_name: str=None,
+            order_field: t.Any=None,
+            register: bool=None,
         ) -> _T | Self:
             ...
         
@@ -203,10 +230,11 @@ class alias(t.Generic[_T]):
         cache:bool=None,
         verbose_name: str=None,
         order_field: t.Any=None,
+        register: bool=None,
     ) -> None:
         self.annotate, self.attr, self.expression = annotate, attr, expression
         self.fget, self.fset, self.fdel, self.doc = getter, setter, deleter, doc
-        self.field, self.default, self.cache = field, default, cache
+        self.field, self.default, self.cache, self.register = field, default, cache, register
         self.verbose_name, self.order_field = verbose_name, order_field
     
     def getter(self, fget: t.Callable | bool ) -> _T | Self:
@@ -242,6 +270,7 @@ class alias(t.Generic[_T]):
             cache=self.cache,
             verbose_name=self.verbose_name,
             order_field=self.order_field,
+            register=self.register
         ) | kwargs
 
     def evolve(self, **kwargs) -> _T | Self:
@@ -267,7 +296,7 @@ class alias(t.Generic[_T]):
 
     def _prepare(self, cls: t.Type[_T_Model], name: str):
         annotate, attr, cache, expression = self.annotate, self.attr, self.cache, self.expression
-        fget, fset, fdel = self.fget, self.fset, self.fdel
+        fget, fset, fdel, register = self.fget, self.fset, self.fdel, self.register
 
         if attr is None:
             lookup = attr
@@ -297,9 +326,12 @@ class alias(t.Generic[_T]):
 
         if fget is None:
             fget = not not attr
+        
+        if register is None:
+            register = True
 
         self.annotate, self.attr, self.cache, self.expression = annotate, attr, cache, expression
-        self.fget, self.fset, self.fdel, self.name = fget, fset, fdel, name
+        self.fget, self.fset, self.fdel, self.name, self.register = fget, fset, fdel, name, register
 
     def contribute_to_class(self, cls: t.Type[_T_Model], name: str):
         cls = ImplementsAliases.prepare(cls)
