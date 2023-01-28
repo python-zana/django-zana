@@ -33,8 +33,17 @@ class test_alias:
         stop, age = count +1, lambda: randint(16,85)
         return [Author.objects.create(name=f"Author {x}", age=age()) for x in range(1, stop)]
 
-    def create_books(self, c_publishers: Counter[Publisher, Author], c_authors: Counter[Author, int]):
-        c_authors, publishers, max_rating = +c_authors, list(c_publishers.elements()), max(Rating)
+    def create_books(self, c_publishers: Counter[Publisher, int] | int=2, c_authors: Counter[Author, int]=None):
+        if isinstance(c_publishers, int):
+            c_publishers = Counter({p: randint(1, 3) for p in self.create_publishers(c_publishers)})
+        
+        if c_authors is None:
+            c_authors = len(c_publishers) * 2
+
+        if isinstance(c_authors, int):
+            c_authors = Counter({a: randint(1, c_publishers.total()//2) for a in self.create_authors(c_authors)})
+            
+        publishers, max_rating = list(c_publishers.elements()), max(Rating)
         shuffle(publishers)
         books: list[Book] = []
         n_authors = c_authors.total() // c_publishers.total() 
@@ -57,7 +66,7 @@ class test_alias:
             books.append(book)
         return books
             
-    def test_basic(self):
+    def test_attribute_access(self):
         publishers = self.create_publishers(3)
         authors = self.create_authors(6)
         c_publishers = Counter({o: c for o,c in zip(publishers, (6,4,2)) })
@@ -68,6 +77,7 @@ class test_alias:
         for publisher in publishers:
             e_books = publisher.assigned(Book)
             assert len(e_books) == publisher.books.count()
+            assert {*e_books} == {*publisher.books.all()}
 
             e_rating = mean(b.rating for b in e_books)
             assert e_rating == publisher.rating == publisher.__dict__['rating']
@@ -76,6 +86,9 @@ class test_alias:
             result = Publisher.objects.get(pk=publisher.pk, rating=e_rating)
             assert publisher == result
             assert e_rating == result.__dict__['rating']
+            
+            e_income = sum(b.num_sold * (b.price * result.commission) for b in e_books)
+            assert result.income == e_income
 
             result.rating = mk_ratting = Mock(float)
             assert mk_ratting is result.rating
@@ -90,3 +103,13 @@ class test_alias:
 
         # assert 0
 
+    def test_queryset(self):
+        books = self.create_books()
+        authors = list(Author.objects.alias('rating').all())
+
+        for author in authors:
+            e_books = list(author.books.all())
+            e_rating = mean(b.rating for b in e_books)
+            assert e_rating == author.__dict__['rating']
+            author.refresh_from_db(None, ['rating'])
+            assert e_rating == author.rating
