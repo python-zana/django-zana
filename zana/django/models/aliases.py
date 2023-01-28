@@ -3,10 +3,11 @@ from abc import ABC, abstractmethod
 from collections import ChainMap, abc
 from contextlib import suppress
 from functools import reduce, wraps
+from multiprocessing.dummy import Manager
 from operator import attrgetter
 from types import FunctionType
 from types import GenericAlias as GenericAliasType
-from types import MethodType
+from types import MappingProxyType, MethodType
 
 from typing_extensions import Self
 from zana.common import NotSet, cached_attr
@@ -18,132 +19,33 @@ from django.db.models.functions import Coalesce
 
 _T = t.TypeVar("_T")
 _T_Src = t.TypeVar("_T_Src")
+_T_Default = t.TypeVar("_T_Default")
 _T_Model = t.TypeVar("_T_Model", bound="ImplementsAliases", covariant=True)
 _T_Expr = t.Union[Combinable, str, m.Field, 'alias', t.Callable[[_T_Model], t.Union[Combinable, str, m.Field, 'alias']]]
 
 
-def get_query_aliases(model: type[_T_Model] | _T_Model, default=None) -> abc.Mapping[str, 'alias'] | None:
-    return getattr(model, '__query_aliases__', default)
-
-
-def _patch_queryset(cls: type[m.QuerySet[_T_Model]]):
-
-    if not getattr(cls.annotate, "_loads_aliases_", None):
-        orig_annotate = cls.annotate
-
-        @wraps(orig_annotate)
-        def annotate(self: cls[_T_Model], *args, **kwds):
-            nonlocal orig_annotate
-            if aliases := get_query_aliases(self.model):
-                args = [
-                    a for a in args 
-                    if not (
-                        (n := a if isinstance(a, str) else a.name if isinstance(a, m.F) else None) 
-                            and n in aliases 
-                                and kwds.setdefault(n, m.F(n))
-                    ) 
-                ]
-            return orig_annotate(self, *args, **kwds)
-
-        annotate._loads_aliases_ = True
-        cls.annotate = annotate
-
-    if not getattr(cls.alias, "_loads_aliases_", None):
-        orig_alias = cls.alias
-
-        @wraps(orig_alias)
-        def alias(self: cls[_T_Model], *args, **kwds):
-            nonlocal orig_alias
-            if aliases := get_query_aliases(model := self.model):
-                annotate = []
-                args = [
-                    a for a in args 
-                    if not (
-                        (n := a if isinstance(a, str) else a.name if isinstance(a, m.F) else None) 
-                            and n in aliases 
-                                and (kwds.setdefault(n, (aka := aliases[n]).get_expression(model)), aka.annotate and annotate.append(n))
-                    ) 
-                ]
-                if annotate:
-                    return orig_alias(self, *args, **kwds).annotate(*annotate)
-            
-            return orig_alias(self, *args, **kwds)
-
-        alias._loads_aliases_ = True
-        cls.alias = alias
+def get_query_aliases(model: type[_T_Model] | _T_Model, default: _T_Default=None) -> abc.Mapping[str, 'alias'] | _T_Default:   
+    if issubclass(model, ImplementsAliases):
+        return model.__query_aliases__
+    elif not issubclass(model, m.Model):
+        raise TypeError(f"expected `Model` subclass. not `{model.__class__.__name__}`")
+    return default
 
 
 
-def _patch_model(cls: t.Type[_T_Model]):
-    conf = get_query_aliases(cls)
-    if not conf is None:
-        aliases: dict = None
-        annotations = *(a.name for a in conf.values() if a.annotate and a.register),
-        def aka_init():
-            nonlocal aliases
-            if aliases is None:
-                aliases = { a.name: a.get_expression(cls) for a in conf.values() if a.register }
-            else:
-                raise ValueError('No second calls')
-            return aliases
-        
-        if not getattr(cls.refresh_from_db, "_loads_aliases_", None):
-            orig_refresh_from_db = cls.refresh_from_db
-            @wraps(orig_refresh_from_db)
-            def refresh_from_db(self, using=None, fields=None):
-                nonlocal orig_refresh_from_db
-                
-                if fields:
-                    fields = list(fields)
-                    aliases = (n for n in conf if n in fields and None is fields.remove(n))
-                else:
-                    aliases = (n for n,a in conf.items() if a.cache)
+class ImplementsAliasesManager(ABC, m.Manager[_T_Model] if t.TYPE_CHECKING else t.Generic[_T_Model]):
 
-                for aka in aliases:
-                    with suppress(AttributeError):
-                        delattr(self, aka)
-                        
-                orig_refresh_from_db(self, using, fields)
-
-            refresh_from_db._loads_aliases_ = True
-            cls.refresh_from_db = refresh_from_db
-        
-        for man in cls._meta.managers:
-            for n in ('queryset_class', '_queryset_class'):
-                if isinstance(qs := getattr(man, n, None), type) and issubclass(qs, m.QuerySet):
-                    _patch_queryset(qs)
-                    
-            if not getattr(man.get_queryset, "_loads_aliases_", None):
-                orig_get_qs = man.get_queryset.__func__
-                if annotations:
-                    @wraps(orig_get_qs)
-                    def get_queryset():
-                        nonlocal orig_get_qs, man, aliases, annotations
-                        return orig_get_qs(man).alias(**aliases or aka_init()).annotate(*annotations)
-                else:
-                    @wraps(orig_get_qs)
-                    def get_queryset():
-                        nonlocal orig_get_qs, man, aliases
-                        return orig_get_qs(man).alias(**aliases or aka_init())
-
-                get_queryset._loads_aliases_ = True
-                man.get_queryset = get_queryset
-
-
+    model: type[_T_Model]
+    _initial_query_aliases_: t.Final[abc.Mapping[str, Combinable]] = ...
+    _initial_query_annotations_: t.Final[abc.Mapping[str, m.F]] = ...
+    
 
 class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
 
     __query_aliases__: abc.Mapping[str, 'alias']
 
     @classmethod
-    def __subclasshook__(cls, sub: type):
-        if cls is ImplementsAliases and issubclass(sub, m.Model):
-            if isinstance(getattr(sub, "__query_aliases__", None), abc.Mapping):
-                return True
-        return NotImplemented
-    
-    @classmethod
-    def prepare(cls, subclass: type[_T_Model]):
+    def setup_model(cls, subclass: type[_T_Model]):
         if not "__query_aliases__" in subclass.__dict__:
             subclass.__query_aliases__ = ChainMap(
                 {},
@@ -155,6 +57,7 @@ class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
             )
 
         return cls.register(subclass)
+
 
 
 
@@ -270,7 +173,7 @@ class alias(t.Generic[_T]):
             cache=self.cache,
             verbose_name=self.verbose_name,
             order_field=self.order_field,
-            register=self.register
+            register=self.register,
         ) | kwargs
 
     def evolve(self, **kwargs) -> _T | Self:
@@ -334,7 +237,7 @@ class alias(t.Generic[_T]):
         self.fget, self.fset, self.fdel, self.name, self.register = fget, fset, fdel, name, register
 
     def contribute_to_class(self, cls: t.Type[_T_Model], name: str):
-        cls = ImplementsAliases.prepare(cls)
+        cls = ImplementsAliases.setup_model(cls)
         self._prepare(cls, name)
         cls.__query_aliases__[name], descriptor = self, self.create_descriptor(cls)
 
@@ -388,16 +291,148 @@ class alias(t.Generic[_T]):
         return func or None
 
     def make_deleter(self):
-        # __tracebackhide__ = True
-        # func, name = self.fdel, self.name
-        # if func is True:
-        #     def func(self: _T_Model):
-        #         __tracebackhide__ = True
-        #         nonlocal name
-        #         try:
-        #             del self.__dict__[name]
-        #         except KeyError:
-        #             raise AttributeError(name)
-
         return self.fdel
 
+
+
+class _Patcher:
+    """Monkey patch Manager, Queryset and Model classes
+    """
+    @staticmethod
+    def model(cls: type[_T_Model]):
+        if not getattr(cls.refresh_from_db, "_loads_aliases_", None):
+            orig_refresh_from_db = cls.refresh_from_db
+            @wraps(orig_refresh_from_db)
+            def refresh_from_db(self, using=None, fields=None):
+                nonlocal orig_refresh_from_db
+                if dct := get_query_aliases(self.__class__):
+                    if fields_ := fields:
+                        fields = list(fields)
+                        aliases = (n for n in fields if not (n in dct and not fields.remove(n)))
+                    else:
+                        aliases = (n for n,a in dct.items() if a.cache)
+
+                    for aka in aliases:
+                        with suppress(AttributeError):
+                            delattr(self, aka)
+                    
+                    if not fields and fields_:
+                        return
+                        
+                orig_refresh_from_db(self, using, fields)
+
+            refresh_from_db._loads_aliases_ = True
+            cls.refresh_from_db = refresh_from_db
+        
+    @staticmethod
+    def manager(cls: type['ImplementsAliasesManager[_T_Model]']):
+        if not getattr(cls.get_queryset, '_loads_aliases_', False):
+            base_get_queryset = cls.get_queryset
+            @wraps(base_get_queryset)
+            def get_queryset(self: cls, *args, **kwargs):
+                qs = base_get_queryset(self, *args, **kwargs)
+                if aliases := self._initial_query_aliases_:
+                    qs = qs.alias(**aliases)
+                    if annotations := self._initial_query_annotations_:
+                        qs = qs.annotate(**annotations)
+                        
+                return qs
+            get_queryset._loads_aliases_ = True
+            cls.get_queryset = get_queryset
+
+            if not getattr(cls, '_initial_query_aliases_', None):
+                @cached_attr
+                def _initial_query_aliases_(self: m.Manager[_T_Model]):
+                    model = self.model
+                    return {
+                        n: a.get_expression(model) 
+                        for n,a in get_query_aliases(model, {}).items() if a.register
+                    }
+
+                @cached_attr
+                def _initial_query_annotations_(self: m.Manager[_T_Model]):
+                    return {
+                        n: m.F(n) 
+                        for n,a in get_query_aliases(self.model, {}).items() 
+                        if a.register and a.annotate
+                    }
+
+                _initial_query_aliases_.__set_name__(cls, '_initial_query_aliases_')
+                _initial_query_annotations_.__set_name__(cls, '_initial_query_annotations_')
+
+                cls._initial_query_aliases_ = _initial_query_aliases_
+                cls._initial_query_annotations_ = _initial_query_annotations_
+
+    @staticmethod
+    def queryset(cls: type[m.QuerySet[_T_Model]]):
+
+        if not getattr(cls.annotate, "_loads_aliases_", None):
+            orig_annotate = cls.annotate
+
+            @wraps(orig_annotate)
+            def annotate(self: cls[_T_Model], *args, **kwds):
+                nonlocal orig_annotate
+                if aliases := args and get_query_aliases(self.model):
+                    args = [
+                        a for a in args 
+                        if not (
+                            (n := a if isinstance(a, str) else a.name if isinstance(a, m.F) else None) 
+                                and n in aliases 
+                                    and kwds.setdefault(n, m.F(n) if a is n else a)
+                        ) 
+                    ]
+                return orig_annotate(self, *args, **kwds)
+            annotate._loads_aliases_ = True
+            cls.annotate = annotate
+
+        if not getattr(cls.alias, "_loads_aliases_", None):
+            orig_alias = cls.alias
+
+            @wraps(orig_alias)
+            def alias(self: cls[_T_Model], *args, **kwds):
+                nonlocal orig_alias
+                if aliases := args and get_query_aliases(model := self.model):
+                    annotate = []
+                    args = [
+                        a for a in args 
+                        if not (
+                            isinstance(a, str) and (aka := aliases.get(a)) 
+                                    and kwds.setdefault(a, aka.get_expression(model))
+                                    and (aka.annotate and annotate.append(a),)
+                        ) 
+                    ]
+                    if annotate:
+                        return orig_alias(self, *args, **kwds).annotate(*annotate)
+                
+                return orig_alias(self, *args, **kwds)
+
+            alias._loads_aliases_ = True
+            cls.alias = alias
+
+    @classmethod
+    def patch(cls, *args) -> None:
+        for obj in args:
+            if issubclass(obj, m.Model):
+                cls.model(obj)
+            elif issubclass(obj, m.Manager):
+                cls.manager(obj)
+            elif issubclass(obj, m.QuerySet):
+                cls.queryset(obj)
+            else: # pragma: no cover
+                raise TypeError(
+                    f"expected a subclass of {m.Model | m.Manager | m.QuerySet}"
+                    f"but got {obj.__name__}."
+                )
+    @classmethod
+    def install(cls): # pragma: no cover
+        cls.patch(m.Model, m.Manager, m.QuerySet)
+        try:
+            from polymorphic.managers import PolymorphicManager
+            from polymorphic.query import PolymorphicQuerySet
+        except ImportError:
+            pass
+        else:
+            _Patcher.patch(PolymorphicManager, PolymorphicQuerySet)
+
+
+_Patcher.install()
