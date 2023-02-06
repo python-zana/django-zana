@@ -1,1 +1,5 @@
-from .aliases import alias
+from ._aliases import alias
+
+__all__ = [
+    "alias",
+]
