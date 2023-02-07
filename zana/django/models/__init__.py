@@ -1,5 +1,2 @@
-from ._aliases import alias
-
-__all__ = [
-    "alias",
-]
+from .aliases import alias
+from .fields import AliasField

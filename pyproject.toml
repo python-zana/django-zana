@@ -29,6 +29,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 black = "*"
+psycopg2-binary = "^2.9.5"
 
 
 [tool.poetry.group.test]

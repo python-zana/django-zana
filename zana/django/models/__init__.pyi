@@ -2,10 +2,15 @@ import typing as t
 
 from typing_extensions import Self
 
-from . import _aliases
+from . import aliases, fields
 
-_T = _aliases._T
-_T_Model = _aliases._T_Model
+_T = fields._T
+_T_Model = fields._T_Model
 
-class alias(_aliases.alias[_T], property[_T]):
+class AliasField(fields.AliasField[_T]): ...
+
+_T = aliases._T
+_T_Model = aliases._T_Model
+
+class alias(aliases.alias[_T], property[_T]):
     def __get__(self, __obj: t.Any, __type: type = None) -> _T: ...

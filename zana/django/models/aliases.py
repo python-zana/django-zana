@@ -257,7 +257,7 @@ class alias(t.Generic[_T]):
             defer = False
 
         if fget is None:
-            fget = defer or not annotate
+            fget = True
 
         annotate = not (fget or fset or attr) if annotate is None else not not annotate
 

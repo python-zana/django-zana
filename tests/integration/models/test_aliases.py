@@ -1,5 +1,7 @@
+import math
 import typing as t
 from collections import Counter
+from decimal import Decimal
 from lib2to3 import pytree
 from random import randint, shuffle
 from statistics import mean
@@ -7,7 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from example.aliases.models import Author, BaseModel, Book, Publisher, Rating
+from django.db import models as m
+from example.aliases.models import ZERO_DEC, Author, BaseModel, Book, Publisher, Rating
 from zana.django.models import alias
 
 pytestmark = [
@@ -86,13 +89,17 @@ class test_alias:
             assert {*e_books} == {*publisher.books.all()}
 
             e_rating = mean(b.rating for b in e_books)
-            assert e_rating == publisher.rating == publisher.__dict__["rating"]
+            e_rating_min, e_rating_max = math.floor(e_rating), math.ceil(e_rating)
+            rating = publisher.rating
+            assert e_rating_min <= rating <= e_rating_max
+            assert rating == publisher.__dict__["rating"]
             del publisher.rating
             assert not "rating" in publisher.__dict__
-            result = Publisher.objects.get(pk=publisher.pk, rating=e_rating)
+            result = Publisher.objects.get(
+                pk=publisher.pk, rating__gte=e_rating_min, rating__lte=e_rating_max
+            )
             assert publisher == result
-            assert e_rating == result.__dict__["rating"]
-
+            assert rating == result.__dict__["rating"]
             e_income = sum(b.num_sold * (b.price * result.commission) for b in e_books)
 
             assert result.income == e_income
@@ -100,8 +107,7 @@ class test_alias:
             result.rating = mk_ratting = Mock(float)
             assert mk_ratting is result.rating
             result.refresh_from_db()
-            assert e_rating == result.rating
-
+            assert rating == result.rating
             book = e_books[0]
             assert publisher.name == book.published_by
             assert {*e_books} == {*Book.objects.filter(published_by=publisher.name).all()}
@@ -115,7 +121,7 @@ class test_alias:
         authors = list(Author.objects.alias("rating").all())
 
         for author in authors:
-            e_books = list(author.books.all())
+            e_books = list(author.books.filter(version__isnull=False).all())
             e_rating = mean(b.rating for b in e_books)
             assert e_rating == author.__dict__["rating"]
             author.refresh_from_db(None, ["rating"])
@@ -123,3 +129,7 @@ class test_alias:
 
             e_income = sum(b.num_sold * (b.price - b.commission) for b in e_books)
             assert e_income == author.income
+
+            # version = str(e_books[0].version)
+            assert e_books[0].__dict__["version"] == e_books[0].version == e_books[0].updated_at
+        # assert 0

@@ -12,11 +12,13 @@ from zana.types.enums import IntEnum, StrEnum
 
 from django.db import models as m
 from django.utils import timezone
-from zana.django.models import alias
+from zana.django.models import AliasField, alias
+
+ZERO_DEC = Decimal("0.00")
 
 
 class Rating(IntEnum):
-    VERT_BAD = 1
+    VERY_BAD = 1
     BAD = 2
     AVERAGE = 3
     GOOD = 4
@@ -54,7 +56,7 @@ class BaseModel(m.Model):
     all_mocks: t.Final[dict[tuple[Self, str], Mock]] = defaultdict(Mock)
     created_at: datetime = m.DateTimeField(auto_now_add=True)
     updated_at: datetime = m.DateTimeField(auto_now=True)
-    version: datetime = alias("updated_at")
+    version: datetime = AliasField("updated_at", annotate=True, default=None)
 
     def assigned(self, cls: type[_T]) -> list[_T]:
         return self.all_assignments[self, cls]
@@ -64,11 +66,28 @@ class BaseModel(m.Model):
             key = key.__name__
         return self.all_mocks[key]
 
+    __repr_attr__ = ("id",)
+
+    def __repr_args__(self) -> str:
+        fields = {f.name: f for f in self._meta.get_fields()}
+        return [
+            (at, getattr(self, f"get_{f.name}_display", lambda: getattr(self, f.name, None))())
+            for at in self.__repr_attr__
+            for f in [fields.get(at, m.Field(name=at))]
+        ]
+
+    # def __str__(self) -> str:
+    #     args = dict(self.__repr_args__())
+    #     return f"{args}"
+
 
 class Author(BaseModel):
+    __repr_attr__ = ("id", "name")
     name: str = m.CharField(max_length=200)
     age: str = m.IntegerField()
     books: "m.manager.RelatedManager[Book]"
+
+    # last_modified = AliasField(default=None)
 
     rating: float = alias[float](
         m.Avg("books__rating"),
@@ -96,12 +115,9 @@ class Author(BaseModel):
         return m.Subquery(
             Book.objects.filter(authors__pk=m.OuterRef("pk"))
             .values("authors__pk")
-            .annotate(net_income__sum=m.Sum("net_income", default=_ZERO_DEC))
+            .annotate(net_income__sum=m.Sum("net_income", default=ZERO_DEC))
             .values("net_income__sum")
         )
-
-    def __repr__(self) -> str:
-        return f"<{self.name} [{self.books.count()}]>"
 
 
 class City(StrEnum):
@@ -116,22 +132,20 @@ class City(StrEnum):
         return choice(list(cls))
 
 
-_ZERO_DEC = Decimal("0.00")
-
-
 class Publisher(BaseModel):
+    __repr_attr__ = ("id", "name", "commission", "rating")
+
     name: str = m.CharField(max_length=200)
     city: City = m.CharField(max_length=64, choices=City.choices, default=City.random)
     commission: Decimal = m.DecimalField(max_digits=4, decimal_places=2, default=rand_commission)
     books: "m.manager.RelatedManager[Book]"
 
     rating = alias[float | int](
-        m.Avg("books__rating"), annotate=True, default=0.0, output_field=m.FloatField()
+        m.Avg("books__rating", output_field=m.DecimalField(max_digits=20, decimal_places=2)),
+        annotate=True,
+        default=ZERO_DEC,
+        output_field=m.DecimalField(max_digits=20, decimal_places=2),
     )
-
-    @rating.getter
-    def rating(self) -> int | float:
-        return self.books.aggregate(avg_rating=m.Avg("rating", default=0))["avg_rating"]
 
     income = alias[Decimal]()
 
@@ -140,15 +154,14 @@ class Publisher(BaseModel):
         return m.Subquery(
             Book.objects.filter(publisher=m.OuterRef("pk"))
             .values("publisher")
-            .annotate(commission_income__sum=m.Sum("commission_income", default=_ZERO_DEC))
+            .annotate(commission_income__sum=m.Sum("commission_income", default=ZERO_DEC))
             .values("commission_income__sum")
         )
 
-    def __repr__(self) -> str:
-        return f"<{self.name}: [{self.books.count()}] {self.commission}>"
-
 
 class Book(BaseModel):
+    __repr_attr__ = ("id", "title", "price", "num_sold", "rating")
+
     title: str = m.CharField(max_length=200)
     price: Decimal = m.DecimalField(max_digits=12, decimal_places=2, default=rand_price)
     rating: int = m.SmallIntegerField(choices=Rating.choices, null=True)
@@ -191,5 +204,7 @@ class Book(BaseModel):
 
     published_by = alias(setter=True)[Self].publisher.name
 
-    def __repr__(self) -> str:
-        return f"<{self.title}: ${self.price} x {self.num_sold} = ${self.gross_income}>"
+
+class Novel(Book):
+    class Meta:
+        proxy = True
