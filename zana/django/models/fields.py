@@ -154,8 +154,6 @@ class AliasField(m.Field, t.Generic[_T]):
     def contribute_to_class(self, cls: type[_T_Model], name: str, private_only=False):
         super().contribute_to_class(cls, name, private_only)
 
-        print(f"{cls.__name__:<24} : {name!r}")
-
         cls = ImplementsAliases.setup_model(cls)
         self._prepare(cls, name)
         cls.__alias_fields__.add(name)
@@ -167,6 +165,9 @@ class AliasField(m.Field, t.Generic[_T]):
             descriptor.__set_name__(cls, name)
 
         setattr(cls, name, descriptor)
+
+    def at(self, src: _T_Src) -> _T_Src:
+        return AliasPathBuilder[_T](self, src)
 
     def annotation(self, expression: _T_Expr):
         self.expression = expression
@@ -181,13 +182,8 @@ class AliasField(m.Field, t.Generic[_T]):
         return fset
 
     def deleter(self, fdel: t.Callable):
-        return self.evolve(deleter=fdel)
-
-    def at(self, src: _T_Src) -> _T_Src:
-        return AliasPathBuilder[_T](self, src)
-
-    # def __repr__(self) -> str:
-    #     return f"{self.__class__.__name__}({self.name!r}, {[*filter(None, (self.attr, self.expression))]})"
+        self.fdel = fdel
+        return fdel
 
     def _evolve_kwargs(self, kwargs: dict) -> dict:
         return (
