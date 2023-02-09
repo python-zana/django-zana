@@ -7,7 +7,7 @@ from operator import attrgetter
 from types import FunctionType, MethodType
 
 from typing_extensions import Self
-from zana.common import NotSet, cached_attr
+from zana.common import cached_attr
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m

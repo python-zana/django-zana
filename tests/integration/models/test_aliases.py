@@ -5,9 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from django.db import models as m
-from example.aliases.models import ZERO_DEC, Author, BaseModel, Book, Publisher, Rating
-from zana.django.models import alias
+from example.aliases.models import Author, BaseModel, Book, Publisher, Rating
 
 pytestmark = [
     pytest.mark.django_db,

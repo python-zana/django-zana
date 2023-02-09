@@ -1,13 +1,12 @@
 import typing as t
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections import ChainMap, abc
 from contextlib import suppress
 from functools import reduce, wraps
-from multiprocessing.dummy import Manager
 from operator import attrgetter
 from types import FunctionType
 from types import GenericAlias as GenericAliasType
-from types import MappingProxyType, MethodType
+from types import MethodType
 
 from typing_extensions import Self
 from zana.common import NotSet, cached_attr
@@ -484,8 +483,8 @@ class _Patcher:
     def install(cls):  # pragma: no cover
         cls.patch(m.Model, m.Manager, m.QuerySet)
         try:
-            from polymorphic.managers import PolymorphicManager
-            from polymorphic.query import PolymorphicQuerySet
+            from polymorphic.managers import PolymorphicManager  # type: ignore
+            from polymorphic.query import PolymorphicQuerySet  # type: ignore
         except ImportError:
             pass
         else:
