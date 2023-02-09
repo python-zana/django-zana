@@ -104,7 +104,7 @@ class BaseAliasDescriptor:
 
     @property
     def short_description(self):
-        return self.field.verbose_name
+        return self.field.verbose_name or self.field.name
 
 
 class DynamicAliasDescriptor(BaseAliasDescriptor, property):

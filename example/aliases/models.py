@@ -1,10 +1,9 @@
 import typing as t
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from decimal import Decimal
 from enum import auto
-from functools import partial
-from random import choice, randint, random
+from random import choice, randint, random, shuffle
 from unittest.mock import Mock
 
 from typing_extensions import Self
@@ -56,7 +55,7 @@ class BaseModel(m.Model):
     all_mocks: t.Final[dict[tuple[Self, str], Mock]] = defaultdict(Mock)
     created_at: datetime = m.DateTimeField(auto_now_add=True)
     updated_at: datetime = m.DateTimeField(auto_now=True)
-    version: datetime = AliasField("updated_at", annotate=True, default=None)
+    version: datetime = AliasField("updated_at", default=None)
 
     def assigned(self, cls: type[_T]) -> list[_T]:
         return self.all_assignments[self, cls]
@@ -76,9 +75,8 @@ class BaseModel(m.Model):
             for f in [fields.get(at, m.Field(name=at))]
         ]
 
-    # def __str__(self) -> str:
-    #     args = dict(self.__repr_args__())
-    #     return f"{args}"
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({dict(self.__repr_args__())})"
 
 
 class Author(BaseModel):
@@ -87,37 +85,43 @@ class Author(BaseModel):
     age: str = m.IntegerField()
     books: "m.manager.RelatedManager[Book]"
 
-    # last_modified = AliasField(default=None)
-
-    rating: float = alias[float](
+    rating: Decimal = AliasField[float](
         m.Avg("books__rating"),
         annotate=True,
-        defer=True,
-        default=0.0,
-        output_field=m.FloatField(),
+        default=ZERO_DEC,
+        output_field=m.DecimalField(max_digits=20, decimal_places=2),
     )
 
-    publishers: "m.manager.RelatedManager[Book]" = alias()
-    if not t.TYPE_CHECKING:
+    num_books: Decimal = AliasField[float](m.Count("books__pk"))
 
-        @publishers
-        def publishers(cls):
-            return m.Subquery(Publisher.objects.filter(books__authors__pk=m.OuterRef("pk")))
+    publishers: "m.manager.RelatedManager[Book]" = AliasField()
 
-        @publishers.getter
-        def publishers(self) -> "m.manager.RelatedManager[Book]":
-            return self.books.order_by("publisher").distinct("publisher")
+    @publishers.annotation
+    def get_publishers_annotation(cls):
+        return m.Subquery(Publisher.objects.filter(books__authors__pk=m.OuterRef("pk")))
 
-    income = alias[Decimal](defer=True)
+    @publishers.getter
+    def get_publishers(self) -> "m.manager.RelatedManager[Book]":
+        return self.books.order_by("publisher").distinct("publisher")
 
-    @income
-    def income(cls):
+    income: Decimal = AliasField()
+
+    @income.annotation
+    def get_income(cls):
         return m.Subquery(
             Book.objects.filter(authors__pk=m.OuterRef("pk"))
             .values("authors__pk")
             .annotate(net_income__sum=m.Sum("net_income", default=ZERO_DEC))
             .values("net_income__sum")
         )
+
+    @classmethod
+    def create_samples(cls, count=4):
+        stop, age = count + 1, lambda: randint(16, 85)
+        return [cls.objects.create(name=f"Author {x}", age=age()) for x in range(1, stop)]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.pk})"
 
 
 class City(StrEnum):
@@ -139,6 +143,7 @@ class Publisher(BaseModel):
     city: City = m.CharField(max_length=64, choices=City.choices, default=City.random)
     commission: Decimal = m.DecimalField(max_digits=4, decimal_places=2, default=rand_commission)
     books: "m.manager.RelatedManager[Book]"
+    num_books: Decimal = AliasField[float](m.Count("books__pk"))
 
     rating = alias[float | int](
         m.Avg("books__rating", output_field=m.DecimalField(max_digits=20, decimal_places=2)),
@@ -158,6 +163,13 @@ class Publisher(BaseModel):
             .values("commission_income__sum")
         )
 
+    @classmethod
+    def create_samples(cls, count=2):
+        return [cls.objects.create(name=f"Publisher {x}") for x in range(count)]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.pk})"
+
 
 class Book(BaseModel):
     __repr_attr__ = ("id", "title", "price", "num_sold", "rating")
@@ -165,7 +177,7 @@ class Book(BaseModel):
     title: str = m.CharField(max_length=200)
     price: Decimal = m.DecimalField(max_digits=12, decimal_places=2, default=rand_price)
     rating: int = m.SmallIntegerField(choices=Rating.choices, null=True)
-    authors: "m.manager.RelatedManager[Author]" = m.ManyToManyField("Author", related_name="books")
+    authors: "m.manager.RelatedManager[Author]" = m.ManyToManyField(Author, related_name="books")
     publisher: Publisher = m.ForeignKey("Publisher", m.RESTRICT, related_name="books")
     num_sold: int = m.IntegerField(default=rand_num_sold)
     date_published = m.DateTimeField(null=True, default=rand_date)
@@ -203,6 +215,54 @@ class Book(BaseModel):
     published_on = alias("date_published", annotate=True)
 
     published_by = alias(setter=True)[Self].publisher.name
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.pk})"
+
+    @classmethod
+    def create_samples(
+        cls,
+        c_publishers: Counter[Publisher, int] | int = 2,
+        c_authors: Counter[Author, int] = None,
+    ):
+        if isinstance(c_publishers, int):
+            c_publishers = Counter(
+                {p: randint(1, 3) for p in Publisher.create_samples(c_publishers)}
+            )
+
+        if c_authors is None:
+            c_authors = len(c_publishers) * 2
+
+        if isinstance(c_authors, int):
+            c_authors = Counter(
+                {
+                    a: randint(1, c_publishers.total() // 2)
+                    for a in Author.create_samples(c_authors)
+                }
+            )
+
+        publishers, max_rating = list(c_publishers.elements()), max(Rating)
+        shuffle(publishers)
+        books: list[Book] = []
+        n_authors = c_authors.total() // c_publishers.total()
+        n_rem = c_authors.total() % c_publishers.total()
+        for x, publisher in enumerate(publishers):
+            (*authors,) = c_authors
+            shuffle(authors)
+            authors = authors[: n_authors + 1 if x < n_rem else n_authors]
+            book = publisher.books.create(
+                title=f"Book {x}",
+                rating=Rating(x % max_rating + 1),
+            )
+
+            authors and book.authors.add(*authors)
+            for obj in [publisher, *authors]:
+                obj.assigned(Book).append(book)
+                book.assigned(obj.__class__).append(obj)
+
+            c_authors = +(c_authors - Counter(authors))
+            books.append(book)
+        return books
 
 
 class Novel(Book):

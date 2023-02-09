@@ -1,15 +1,10 @@
-import os
 import typing as t
-from abc import ABC, abstractmethod
-from collections import ChainMap, abc
-from contextlib import suppress
+from abc import ABC
+from collections import abc
 from functools import reduce, wraps
 from itertools import chain
-from multiprocessing.dummy import Manager
 from operator import attrgetter
-from types import FunctionType
-from types import GenericAlias as GenericAliasType
-from types import MappingProxyType, MethodType
+from types import FunctionType, MethodType
 
 from typing_extensions import Self
 from zana.common import NotSet, cached_attr
@@ -81,7 +76,7 @@ class AliasPathBuilder(t.Generic[_T]):
         return self
 
     def __call__(self) -> "AliasField":
-        aka = self.__alias__.evolve()
+        aka = self.__alias__._set_attrs()
         aka.annotation("__".join(self.__args__))
         return aka
 
@@ -122,7 +117,35 @@ class CachedAliasDescriptor(BaseAliasDescriptor, cached_attr[_T]):
 
 
 class AliasField(m.Field, t.Generic[_T]):
-    is_alias = True
+    _KWARGS_TO_ATTRS_ = {
+        "expression": "expression",
+        "getter": "fget",
+        "setter": "fset",
+        "deleter": "fdel",
+        "annotate": "annotate",
+        "attr": "attr",
+        "output_field": "output_field",
+        "cache": "cache",
+        "defer": "defer",
+    }
+    _FIELD_DEFAULTS_ = {
+        "editable": False,
+    }
+
+    name: str
+    cache: bool
+    attr: str
+    expression: _T_Expr
+    annotate: bool
+    defer: bool
+    output_field: m.Field | None
+    verbose_name: str
+    order_field: t.Any
+    boolean: bool
+
+    fget: abc.Callable[[_T_Model], _T]
+    fset: abc.Callable[[_T_Model, _T], t.NoReturn]
+    fdel: abc.Callable[[_T_Model], t.NoReturn]
 
     def __init__(
         self,
@@ -135,15 +158,12 @@ class AliasField(m.Field, t.Generic[_T]):
         attr: str = None,
         doc: str = None,
         output_field: m.Field = None,
-        default=NotSet,
         cache: bool = None,
         defer: bool = None,
         **kwds,
     ) -> None:
-        self.annotate, self.attr, self.expression, self.defer = annotate, attr, expression, defer
-        self.fget, self.fset, self.fdel, self.doc = getter, setter, deleter, doc
-        self.output_field, self.cache = output_field, cache
-        super().__init__(default=default, **kwds)
+        super().__init__(**self._FIELD_DEFAULTS_ | kwds)
+        self._set_attrs(**{k: v for k, v in vars().items() if k in self._KWARGS_TO_ATTRS_})
 
     def db_type(self, connection):
         return None
@@ -170,54 +190,35 @@ class AliasField(m.Field, t.Generic[_T]):
         return AliasPathBuilder[_T](self, src)
 
     def annotation(self, expression: _T_Expr):
-        self.expression = expression
+        self._set_attrs(expression=expression)
         return expression
 
     def getter(self, fget: t.Callable[[t.Any], _T]):
-        self.fget = fget
+        self._set_attrs(getter=fget)
         return fget
 
     def setter(self, fset: t.Callable[[t.Any], _T]):
-        self.fset = fset
+        self._set_attrs(setter=fset)
         return fset
 
     def deleter(self, fdel: t.Callable):
-        self.fdel = fdel
+        self._set_attrs(deleter=fdel)
         return fdel
 
-    def _evolve_kwargs(self, kwargs: dict) -> dict:
-        return (
-            dict(
-                expression=self.expression,
-                getter=self.fget,
-                setter=self.fset,
-                deleter=self.fdel,
-                annotate=self.annotate,
-                attr=self.attr,
-                doc=self.doc,
-                output_field=self.output_field,
-                default=self.default,
-                cache=self.cache,
-                defer=self.defer,
-                verbose_name=self.verbose_name,
-                boolean=self.boolean,
-                order_field=self.order_field,
-            )
-            | kwargs
-        )
-
-    def evolve(self, **kwargs) -> _T | Self:
-        return self.__class__(**self._evolve_kwargs(kwargs))
+    def _set_attrs(self, **kwargs):
+        k2a = self._KWARGS_TO_ATTRS_
+        for k, v in kwargs.items():
+            setattr(self, k2a[k], v)
 
     def get_expression(self, cls: t.Type[m.Model]):
-        default, expr, field = self.get_default, self.expression, self.output_field
+        expr, field = self.expression, self.output_field
         if isinstance(expr, _T_Func):
             expr = expr(cls)
 
         if isinstance(expr, str):
             expr = m.F(expr)
 
-        if callable(default) and (default := default()) is not None:
+        if self.has_default() and (default := self.get_default()) is not None:
             expr = Coalesce(expr, default, output_field=field)
         elif field:
             expr = m.ExpressionWrapper(expr, output_field=field)
@@ -235,13 +236,7 @@ class AliasField(m.Field, t.Generic[_T]):
                 lookup = expression
             attr = lookup and lookup.replace("__", ".")
 
-        if defer is None:
-            defer = False
-
-        if fget is None:
-            fget = True
-
-        annotate = not (fget or fset or attr) if annotate is None else not not annotate
+        annotate = fget is False and not (fset or attr) if annotate is None else not not annotate
 
         if cache is None:
             cache = annotate or not attr
@@ -270,35 +265,39 @@ class AliasField(m.Field, t.Generic[_T]):
             self.make_getter(),
             self.make_setter(),
             self.make_deleter(),
-            doc=self.doc,
+            doc=self.help_text,
         )
         return ret
 
     def make_getter(self):
-        attr, default, fget, name = self.attr, self.get_default, self.fget, self.name
-        if fget is True:
+        anno, attr, defer, fget, name = self.annotate, self.attr, self.defer, self.fget, self.name
+        if fget in (True, None):
             if attr:
                 fget = attrgetter(attr)
             else:
 
                 def fget(self: _T_Model):
-                    nonlocal name
+                    nonlocal name, defer, anno
                     if self._state.adding:
                         raise AttributeError(name)
-                    qs = self._meta.base_manager.filter(pk=self.pk).alias(name).annotate(name)
-                    return qs.values_list(name, flat=True).first()
+                    qs = self._meta.base_manager.filter(pk=self.pk)
+                    if defer:
+                        qs = qs = qs.alias(name)
+                    if anno is False:
+                        qs = qs.annotate(name)
+                    return qs.values_list(name, flat=True).get()
 
-        if fget and default is not None:
-            fget_ = fget
+        if fget and self.has_default():
+            fget_, field = fget, self
 
             @wraps(fget_)
             def fget(self):
-                nonlocal default, fget_
+                nonlocal field, fget_
                 try:
                     val = fget_(self)
                 except AttributeError:
                     val = None
-                return default() if val is None else val
+                return field.get_default() if val is None else val
 
         return fget or None
 
@@ -540,8 +539,8 @@ class _Patcher:
     def install(cls):  # pragma: no cover
         cls.patch(m.Model, m.Manager, m.QuerySet)
         try:
-            from polymorphic.managers import PolymorphicManager
-            from polymorphic.query import PolymorphicQuerySet
+            from polymorphic.managers import PolymorphicManager  # type: ignore
+            from polymorphic.query import PolymorphicQuerySet  # type: ignore
         except ImportError:
             pass
         else:
