@@ -172,7 +172,7 @@ class AliasField(m.Field, t.Generic[_T]):
         return self.get_attname(), None
 
     def contribute_to_class(self, cls: type[_T_Model], name: str, private_only=False):
-        super().contribute_to_class(cls, name, private_only)
+        super().contribute_to_class(cls, name, True)
 
         cls = ImplementsAliases.setup_model(cls)
         self._prepare(cls, name)

@@ -268,3 +268,5 @@ class Book(BaseModel):
 class Novel(Book):
     class Meta:
         proxy = True
+
+    date_released = AliasField("published_on__date", attr=False)

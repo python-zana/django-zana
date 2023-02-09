@@ -79,4 +79,4 @@ class test_alias:
             assert e_income == a_income
 
             assert e_books[0].version is e_books[0].updated_at
-        # assert 0
+        assert 0
