@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Author, Book, Novel, Publisher
+from .models import Author, Book, Publication, Publisher
 
 
 class BookInlineAdmin(admin.TabularInline):
@@ -36,14 +36,14 @@ class BookAdmin(admin.ModelAdmin):
     ]
 
 
-@admin.register(Novel)
-class NovelAdmin(admin.ModelAdmin):
+@admin.register(Publication)
+class PublicationAdmin(admin.ModelAdmin):
     list_display = [
         "pk",
         "title",
         "rating",
         "price",
-        "date_released",
+        "period",
         "published_on",
     ]
 

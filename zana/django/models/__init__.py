@@ -1,2 +1,2 @@
-from .aliases import alias
-from .fields import AliasField
+from .aliases import AliasField
+from .xaliases import alias

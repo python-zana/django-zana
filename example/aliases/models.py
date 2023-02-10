@@ -6,14 +6,27 @@ from enum import auto
 from random import choice, randint, random, shuffle
 from unittest.mock import Mock
 
+from polymorphic.models import PolymorphicModel
 from typing_extensions import Self
 from zana.types.enums import IntEnum, StrEnum
 
 from django.db import models as m
 from django.utils import timezone
-from zana.django.models import AliasField, alias
+from zana.django.models import AliasField
 
 ZERO_DEC = Decimal("0.00")
+
+
+class City(StrEnum):
+    CAIRO = auto()
+    LONDON = auto()
+    NAIROBI = auto()
+    NEW_YORK = auto()
+    TOKYO = auto()
+
+    @classmethod
+    def random(cls):
+        return choice(list(cls))
 
 
 class Rating(IntEnum):
@@ -79,7 +92,42 @@ class BaseModel(m.Model):
         return f"{self.__class__.__name__}({dict(self.__repr_args__())})"
 
 
-class Author(BaseModel):
+class Publisher(BaseModel):
+    __repr_attr__ = ("id", "name", "commission", "rating")
+
+    name: str = m.CharField(max_length=200)
+    city: City = m.CharField(max_length=64, choices=City.choices, default=City.random)
+    commission: Decimal = m.DecimalField(max_digits=4, decimal_places=2, default=rand_commission)
+    books: "m.manager.RelatedManager[Book]"
+    num_books: Decimal = AliasField[float](m.Count("books__pk"))
+
+    rating: float | int = AliasField(
+        m.Avg("books__rating"),
+        annotate=True,
+        default=ZERO_DEC,
+        output_field=m.DecimalField(decimal_places=2),
+    )
+
+    income: Decimal = AliasField()
+
+    @income.annotation
+    def get_income():
+        return m.Subquery(
+            Book.objects.filter(publisher=m.OuterRef("pk"))
+            .values("publisher")
+            .annotate(commission_income__sum=m.Sum("commission_income", default=ZERO_DEC))
+            .values("commission_income__sum")
+        )
+
+    @classmethod
+    def create_samples(cls, count=2):
+        return [cls.objects.create(name=f"Publisher {x}") for x in range(count)]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.pk})"
+
+
+class Author(BaseModel, PolymorphicModel):
     __repr_attr__ = ("id", "name")
     name: str = m.CharField(max_length=200)
     age: str = m.IntegerField()
@@ -97,20 +145,19 @@ class Author(BaseModel):
     publishers: "m.manager.RelatedManager[Book]" = AliasField()
 
     @publishers.annotation
-    def get_publishers_annotation(cls):
+    def get_publishers_annotation():
         return m.Subquery(Publisher.objects.filter(books__authors__pk=m.OuterRef("pk")))
 
     @publishers.getter
     def get_publishers(self) -> "m.manager.RelatedManager[Book]":
         return self.books.order_by("publisher").distinct("publisher")
 
-    income: Decimal = AliasField()
+    income: Decimal = AliasField(output_field=m.DecimalField(decimal_places=2))
 
     @income.annotation
-    def get_income(cls):
+    def get_income():
         return m.Subquery(
             Book.objects.filter(authors__pk=m.OuterRef("pk"))
-            .values("authors__pk")
             .annotate(net_income__sum=m.Sum("net_income", default=ZERO_DEC))
             .values("net_income__sum")
         )
@@ -124,54 +171,11 @@ class Author(BaseModel):
         return f"{self.name} ({self.pk})"
 
 
-class City(StrEnum):
-    CAIRO = auto()
-    LONDON = auto()
-    NAIROBI = auto()
-    NEW_YORK = auto()
-    TOKYO = auto()
-
-    @classmethod
-    def random(cls):
-        return choice(list(cls))
+class Writer(Author):
+    house: str = m.CharField(max_length=200)
 
 
-class Publisher(BaseModel):
-    __repr_attr__ = ("id", "name", "commission", "rating")
-
-    name: str = m.CharField(max_length=200)
-    city: City = m.CharField(max_length=64, choices=City.choices, default=City.random)
-    commission: Decimal = m.DecimalField(max_digits=4, decimal_places=2, default=rand_commission)
-    books: "m.manager.RelatedManager[Book]"
-    num_books: Decimal = AliasField[float](m.Count("books__pk"))
-
-    rating = alias[float | int](
-        m.Avg("books__rating", output_field=m.DecimalField(max_digits=20, decimal_places=2)),
-        annotate=True,
-        default=ZERO_DEC,
-        output_field=m.DecimalField(max_digits=20, decimal_places=2),
-    )
-
-    income = alias[Decimal]()
-
-    @income
-    def income(cls):
-        return m.Subquery(
-            Book.objects.filter(publisher=m.OuterRef("pk"))
-            .values("publisher")
-            .annotate(commission_income__sum=m.Sum("commission_income", default=ZERO_DEC))
-            .values("commission_income__sum")
-        )
-
-    @classmethod
-    def create_samples(cls, count=2):
-        return [cls.objects.create(name=f"Publisher {x}") for x in range(count)]
-
-    def __str__(self) -> str:
-        return f"{self.name} ({self.pk})"
-
-
-class Book(BaseModel):
+class Book(BaseModel, PolymorphicModel):
     __repr_attr__ = ("id", "title", "price", "num_sold", "rating")
 
     title: str = m.CharField(max_length=200)
@@ -180,41 +184,47 @@ class Book(BaseModel):
     authors: "m.manager.RelatedManager[Author]" = m.ManyToManyField(Author, related_name="books")
     publisher: Publisher = m.ForeignKey("Publisher", m.RESTRICT, related_name="books")
     num_sold: int = m.IntegerField(default=rand_num_sold)
-    date_published = m.DateTimeField(null=True, default=rand_date)
+    published_on = m.DateTimeField(null=True, default=rand_date)
 
-    commission = alias[Decimal](m.F("price") * m.F("publisher__commission"), cache=False)
+    published_by = AliasField(setter=True).at(Self).publisher.name
+
+    commission: Decimal = AliasField(m.F("price") * m.F("publisher__commission"), cache=False)
 
     @commission.getter
-    def commission(self):
+    def get_commission(self):
         return self.publisher.commission * self.price
 
-    net_price = alias[Decimal](m.F("price") - m.F("commission"), cache=False)
+    net_price: Decimal = AliasField(
+        m.F("price") - m.F("commission"),
+        output_field=m.DecimalField(decimal_places=2),
+        cache=False,
+    )
 
     @net_price.getter
-    def net_price(self):
+    def get_net_price(self):
         return self.price * self.commission
 
-    net_income = alias[Decimal](m.F("net_price") * m.F("num_sold"), cache=False)
+    net_income: Decimal = AliasField(
+        m.F("net_price") * m.F("num_sold"),
+        output_field=m.DecimalField(decimal_places=2),
+        cache=False,
+    )
 
     @net_income.getter
-    def net_income(self):
+    def get_net_income(self):
         return self.num_sold * self.net_price
 
-    commission_income = alias[Decimal](m.F("commission") * m.F("num_sold"), cache=False)
+    commission_income: Decimal = AliasField(m.F("commission") * m.F("num_sold"), cache=False)
 
     @commission_income.getter
-    def commission_income(self):
+    def get_commission_income(self):
         return self.num_sold * self.commission
 
-    gross_income = alias[Decimal](m.F("price") * m.F("num_sold"), cache=False)
+    gross_income: Decimal = AliasField(m.F("price") * m.F("num_sold"), cache=False)
 
     @gross_income.getter
-    def gross_income(self):
+    def get_gross_income(self):
         return self.num_sold * self.price
-
-    published_on = alias("date_published", annotate=True)
-
-    published_by = alias(setter=True)[Self].publisher.name
 
     def __str__(self) -> str:
         return f"{self.title} ({self.pk})"
@@ -265,8 +275,22 @@ class Book(BaseModel):
         return books
 
 
-class Novel(Book):
+class Publication(Book):
     class Meta:
         proxy = True
 
-    date_released = AliasField("published_on__date", attr=False)
+    period = AliasField("published_on__date")
+
+
+class Magazine(Publication):
+    class Meta:
+        proxy = True
+
+    issue = AliasField(m.F("period"), output_field=m.CharField())
+
+
+class Paper(Publication):
+    class Meta:
+        proxy = True
+
+    issue = AliasField(m.F("published_on__time"), output_field=m.CharField())

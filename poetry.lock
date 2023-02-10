@@ -309,6 +309,21 @@ argon2 = ["argon2-cffi (>=19.1.0)"]
 bcrypt = ["bcrypt"]
 
 [[package]]
+name = "django-polymorphic"
+version = "3.1.0"
+description = "Seamless polymorphic inheritance for Django models"
+category = "dev"
+optional = false
+python-versions = "*"
+files = [
+    {file = "django-polymorphic-3.1.0.tar.gz", hash = "sha256:d6955b5308bf6e41dcb22ba7c96f00b51dfa497a8a5ab1e9c06c7951bf417bf8"},
+    {file = "django_polymorphic-3.1.0-py3-none-any.whl", hash = "sha256:08bc4f4f4a773a19b2deced5a56deddd1ef56ebd15207bf4052e2901c25ef57e"},
+]
+
+[package.dependencies]
+Django = ">=2.1"
+
+[[package]]
 name = "exceptiongroup"
 version = "1.1.0"
 description = "Backport of PEP 654 (exception groups)"
@@ -1207,4 +1222,4 @@ typing-extensions = ">=4.4.0,<5.0.0"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<4.0"
-content-hash = "586a3df3ef0c57d1446ca7d39bc1e3ce093604c2a770a8a96b9b85e9a40ad771"
+content-hash = "9511953b3764adb0d99c15b9656a68fae6a54bc4bf0505f60557d0e85bc893c9"
