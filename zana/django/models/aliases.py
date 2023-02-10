@@ -10,7 +10,6 @@ from typing_extensions import Self
 from zana.common import cached_attr
 
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
