@@ -281,8 +281,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return self
 
     def __init_subclass__(cls, **kw) -> None:
-        if "_internal_alias_type_" not in cls.__dict__:
-            cls._internal_alias_type_ = None
+        cls._internal_alias_type_ = cls.__dict__.get("_internal_alias_type_")
         return super().__init_subclass__(**kw)
 
     @t.overload
