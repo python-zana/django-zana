@@ -43,14 +43,6 @@ logger = getLogger(__name__)
 debug = settings.DEBUG and logger.debug
 
 
-def get_alias_field_names(model: type[_T_Model], default: _T_Default = None):
-    if fields := _get_alias_fields(model):
-        return fields.keys()
-    elif not issubclass(model, m.Model):
-        raise TypeError(f"expected `Model` subclass. not `{model.__class__.__name__}`")
-    return default
-
-
 def _get_alias_fields(model: type[_T_Model], default: _T_Default = None):
     fields = getattr(model, "_alias_fields_", None)
     if fields and isinstance(fields, ModelAliasFields):
@@ -742,12 +734,12 @@ class _Patcher:
             def refresh_from_db(self: _T_Model, using=None, fields=None):
                 nonlocal orig_refresh_from_db
                 cls = self.__class__
-                if a_dict := get_alias_fields(cls):
+                if a_conf := get_alias_fields(cls):
                     if fields_ := fields and set(fields):
-                        fields = fields_ - a_dict.keys()
-                        aliases = (n for n in fields_ & a_dict.keys() if a_dict[n].alias_cache)
+                        fields = fields_ - a_conf.keys()
+                        aliases = fields_ & a_conf.cached.keys()
                     else:
-                        aliases = (n for n, a in a_dict.items() if a.alias_cache)
+                        aliases = a_conf.cached
 
                     for aka in aliases:
                         with suppress(AttributeError):
@@ -769,10 +761,12 @@ class _Patcher:
             @wraps(base_get_queryset)
             def get_queryset(self: cls, *args, **kwargs):
                 qs = base_get_queryset(self, *args, **kwargs)
-                if aliases := self._initial_alias_fields_:
-                    qs = qs.alias(**aliases)
-                    if annotations := self._initial_annotated_alias_fields_:
-                        qs = qs.annotate(**annotations)
+                if (aliases := self._initial_alias_fields_) is None:
+                    return qs
+
+                qs = qs.alias(**aliases)
+                if annotations := self._initial_annotated_alias_fields_:
+                    qs = qs.annotate(**annotations)
 
                 return qs
 
@@ -783,17 +777,13 @@ class _Patcher:
 
                 @cached_attr
                 def _initial_alias_fields_(self: m.Manager[_T_Model]):
-                    model = self.model
-                    aliases = get_alias_fields(model, {})
-                    return {n: a.alias_annotation for n, a in aliases.items() if not a.alias_defer}
+                    if aliases := get_alias_fields(self.model):
+                        return {n: a.alias_annotation for n, a in aliases.eager.items()}
 
                 @cached_attr
                 def _initial_annotated_alias_fields_(self: m.Manager[_T_Model]):
-                    model = self.model
-                    aliases = get_alias_fields(model, {})
-                    return {
-                        n: a.f for n, a in aliases.items() if not a.alias_defer and a.alias_select
-                    }
+                    if aliases := get_alias_fields(self.model):
+                        return {n: a.f for n, a in aliases.selected.items() if not a.alias_defer}
 
                 _initial_alias_fields_.__set_name__(cls, "_initial_alias_fields_")
                 _initial_annotated_alias_fields_.__set_name__(
@@ -811,7 +801,7 @@ class _Patcher:
             @wraps(orig_annotate)
             def annotate(self: cls[_T_Model], *args, **kwds):
                 nonlocal orig_annotate
-                if aliases := args and get_alias_field_names(self.model):
+                if aliases := args and get_alias_fields(self.model):
                     args = [
                         a
                         for a in args
@@ -839,7 +829,7 @@ class _Patcher:
             @wraps(orig_alias)
             def alias(self: cls[_T_Model], *args, **kwds):
                 nonlocal orig_alias
-                if aliases := args and get_alias_field_names(self.model):
+                if aliases := args and get_alias_fields(self.model):
                     aka: AliasField
                     model, opts = self.model, self.model._meta
                     annotate = {}
@@ -878,7 +868,7 @@ class _Patcher:
             @wraps(orig__annotate)
             def _annotate(self: cls[_T_Model], args, kwargs, select=True):
                 model = self.model
-                aliases = get_alias_field_names(model, ())
+                aliases = get_alias_fields(model, ())
                 self._validate_values_are_expressions(
                     args + tuple(kwargs.values()), method_name="annotate"
                 )
@@ -909,7 +899,7 @@ class _Patcher:
                         )
                     )
                     if aliases:
-                        names -= aliases
+                        names -= aliases.keys()
 
                 for alias, annotation in annotations.items():
                     if alias in names:
