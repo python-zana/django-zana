@@ -467,6 +467,13 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
             ]
         return errors
 
+    def get_descriptor(self):
+        if (cls := self.get_descriptor_class()) is not None:
+            return cls(self)
+
+    def get_descriptor_class(self):
+        return getattr(self, f"_{'cached' if self.alias_cache else 'dynamic'}_descriptor_class_")
+
     def alias_evolve(self, arg=(), **kwds):
         if isinstance(arg, abc.Mapping):
             arg = arg.items()
@@ -476,10 +483,6 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
                 setattr(self, k2a[k], v)
                 ia.add(k)
         return self
-
-    def get_descriptor(self):
-        if (cls := self.get_descriptor_class()) is not None:
-            return cls(self)
 
     def at(self, src: _T_Src) -> _T_Src:
         return ExpressionBuilder[_T](self, src)
@@ -520,9 +523,6 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
             expr = m.functions.Cast(expr, internal)
 
         return expr
-
-    def get_descriptor_class(self):
-        return getattr(self, f"_{'cached' if self.alias_cache else 'dynamic'}_descriptor_class_")
 
     def get_getter(self):
         fget = self.alias_fget
