@@ -1,6 +1,8 @@
 import copy
+import re
 import typing as t
 from operator import attrgetter
+from types import new_class
 
 from typing_extensions import Self
 from zana.common import cached_attr
@@ -22,7 +24,6 @@ class PseudoField(m.Field, t.Generic[_GT, _ST]):
     Serves as a base class to fields such as `AliasField`
     """
 
-    descriptor_class = None
     output_field: "m.Field[_ST, _GT]" = None
 
     def __init__(self, *args, output_field: _T_Field = None, **kwargs) -> None:
@@ -35,7 +36,7 @@ class PseudoField(m.Field, t.Generic[_GT, _ST]):
         return self.make_col(self.model._meta.db_table, self)
 
     @cached_attr
-    def real_field(self: Self):
+    def concrete_field(self: Self):
         return self._adapt_real_field(self._get_real_field())
 
     def db_type(self, connection):
@@ -50,7 +51,7 @@ class PseudoField(m.Field, t.Generic[_GT, _ST]):
         return self.make_col(alias, output_field)
 
     def make_col(self, alias: str, output_field: m.Field = None):
-        return m.expressions.Col(alias, self, output_field)
+        raise NotImplementedError(f"{self.__class__.__qualname__}")
 
     def contribute_to_class(self, cls: type[_T_Model], name: str, private_only: bool = None):
         super().contribute_to_class(cls, name, private_only)
@@ -62,6 +63,7 @@ class PseudoField(m.Field, t.Generic[_GT, _ST]):
     def deconstruct(self):
         base: tuple[str, str, list, dict] = super().deconstruct()
         cls, (name, path, args, kwargs) = self.__class__, base
+
         if kwargs.get("output_field", self.output_field) != cls.output_field:
             kwargs["output_field"] = self.output_field
 
@@ -88,7 +90,7 @@ class PseudoField(m.Field, t.Generic[_GT, _ST]):
     def _real_field_method(name):
         def method(self: Self, /, *a, **kw):
             nonlocal name
-            return getattr(self.real_field or super(), name)(*a, **kw)
+            return getattr(self.concrete_field or super(), name)(*a, **kw)
 
         method.__name__ = name
         return method

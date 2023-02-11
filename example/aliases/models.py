@@ -99,13 +99,10 @@ class Publisher(BaseModel):
     city: City = m.CharField(max_length=64, choices=City.choices, default=City.random)
     commission: Decimal = m.DecimalField(max_digits=4, decimal_places=2, default=rand_commission)
     books: "m.manager.RelatedManager[Book]"
-    num_books: Decimal = AliasField[float](m.Count("books__pk"))
+    num_books: Decimal = AliasField[m.IntegerField](m.Count("books__pk"))
 
-    rating: float | int = AliasField(
-        m.Avg("books__rating"),
-        annotate=True,
-        default=ZERO_DEC,
-        output_field=m.DecimalField(decimal_places=2),
+    rating: Decimal = AliasField[m.DecimalField](
+        m.Avg("books__rating"), annotate=True, default=ZERO_DEC, max_digits=20, decimal_places=2
     )
 
     income: Decimal = AliasField()
@@ -133,14 +130,15 @@ class Author(BaseModel, PolymorphicModel):
     age: str = m.IntegerField()
     books: "m.manager.RelatedManager[Book]"
 
-    rating: Decimal = AliasField[float](
+    rating: Decimal = AliasField[m.DecimalField](
         m.Avg("books__rating"),
         annotate=True,
         default=ZERO_DEC,
-        output_field=m.DecimalField(max_digits=20, decimal_places=2),
+        max_digits=20,
+        decimal_places=2,
     )
 
-    num_books: Decimal = AliasField[float](m.Count("books__pk"))
+    num_books: int = AliasField[m.IntegerField](m.Count("books__pk"))
 
     publishers: "m.manager.RelatedManager[Book]" = AliasField()
 
@@ -152,12 +150,13 @@ class Author(BaseModel, PolymorphicModel):
     def get_publishers(self) -> "m.manager.RelatedManager[Book]":
         return self.books.order_by("publisher").distinct("publisher")
 
-    income: Decimal = AliasField(output_field=m.DecimalField(decimal_places=2))
+    income: Decimal = AliasField[m.DecimalField](max_digits=20, decimal_places=2)
 
     @income.annotation
     def get_income():
         return m.Subquery(
             Book.objects.filter(authors__pk=m.OuterRef("pk"))
+            .values("authors__pk")
             .annotate(net_income__sum=m.Sum("net_income", default=ZERO_DEC))
             .values("net_income__sum")
         )
@@ -186,41 +185,45 @@ class Book(BaseModel, PolymorphicModel):
     num_sold: int = m.IntegerField(default=rand_num_sold)
     published_on = m.DateTimeField(null=True, default=rand_date)
 
+    year = AliasField[m.IntegerField](m.F("published_on__year"), defer=True)
+
     published_by = AliasField(setter=True).at(Self).publisher.name
 
-    commission: Decimal = AliasField(m.F("price") * m.F("publisher__commission"), cache=False)
+    commission: Decimal = AliasField[m.DecimalField](
+        m.F("price") * m.F("publisher__commission"), max_digits=20, decimal_places=2, cache=False
+    )
 
     @commission.getter
     def get_commission(self):
         return self.publisher.commission * self.price
 
-    net_price: Decimal = AliasField(
-        m.F("price") - m.F("commission"),
-        output_field=m.DecimalField(decimal_places=2),
-        cache=False,
+    net_price: Decimal = AliasField[m.DecimalField](
+        m.F("price") - m.F("commission"), max_digits=20, decimal_places=2, cache=False
     )
 
     @net_price.getter
     def get_net_price(self):
         return self.price * self.commission
 
-    net_income: Decimal = AliasField(
-        m.F("net_price") * m.F("num_sold"),
-        output_field=m.DecimalField(decimal_places=2),
-        cache=False,
+    net_income: Decimal = AliasField[m.DecimalField](
+        m.F("net_price") * m.F("num_sold"), max_digits=20, decimal_places=2, cache=False
     )
 
     @net_income.getter
     def get_net_income(self):
         return self.num_sold * self.net_price
 
-    commission_income: Decimal = AliasField(m.F("commission") * m.F("num_sold"), cache=False)
+    commission_income: Decimal = AliasField[m.DecimalField](
+        m.F("commission") * m.F("num_sold"), max_digits=20, decimal_places=2, cache=False
+    )
 
     @commission_income.getter
     def get_commission_income(self):
         return self.num_sold * self.commission
 
-    gross_income: Decimal = AliasField(m.F("price") * m.F("num_sold"), cache=False)
+    gross_income: Decimal = AliasField[m.DecimalField](
+        m.F("price") * m.F("num_sold"), max_digits=20, decimal_places=2, cache=False
+    )
 
     @gross_income.getter
     def get_gross_income(self):
@@ -279,18 +282,18 @@ class Publication(Book):
     class Meta:
         proxy = True
 
-    period = AliasField("published_on__date")
+    period = AliasField("published_on__date", defer=True)
 
 
 class Magazine(Publication):
     class Meta:
         proxy = True
 
-    issue = AliasField(m.F("period"), output_field=m.CharField())
+    issue = AliasField[m.CharField](m.F("period"))
 
 
 class Paper(Publication):
     class Meta:
         proxy = True
 
-    issue = AliasField(m.F("published_on__time"), output_field=m.CharField())
+    issue = AliasField[m.CharField](m.F("published_on__time"))

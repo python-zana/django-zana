@@ -28,6 +28,75 @@ DEBUG = False
 ALLOWED_HOSTS = ["*"]
 
 
+LOG_LEVEL = "DEBUG"
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "require_debug_false": {
+            "()": "django.utils.log.RequireDebugFalse",
+        },
+        "require_debug_true": {
+            "()": "django.utils.log.RequireDebugTrue",
+        },
+    },
+    "formatters": {
+        "django.server": {
+            "()": "django.utils.log.ServerFormatter",
+            "format": "[{server_time}] {message}",
+            "style": "{",
+        },
+        "verbose": {
+            "format": "[{asctime}] {name} [{levelname}]: {message}",
+            "style": "{",
+        },
+        "simple": {
+            "format": "[{levelname}]: {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "level": "DEBUG",
+            "filters": ["require_debug_true"],
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+        "mail_admins": {
+            "level": "ERROR",
+            "filters": ["require_debug_false"],
+            "class": "django.utils.log.AdminEmailHandler",
+        },
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console", "mail_admins"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "django.db": {
+            "handlers": ["console", "mail_admins"],
+            "level": LOG_LEVEL,
+        },
+        "django.server": {
+            "handlers": ["console", "mail_admins"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "zana.django": {
+            "handlers": ["console", "mail_admins"],
+            "level": LOG_LEVEL,
+            "propagate": True,
+        },
+        "example": {
+            "handlers": ["console", "mail_admins"],
+            "level": LOG_LEVEL,
+            "propagate": True,
+        },
+    },
+}
+
 # Application definition
 
 INSTALLED_APPS = [
