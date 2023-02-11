@@ -1206,14 +1206,14 @@ watchmedo = ["PyYAML (>=3.10)"]
 
 [[package]]
 name = "zana"
-version = "0.1.3"
+version = "0.1.4"
 description = "general utility functions and types"
 category = "main"
 optional = false
-python-versions = ">=3.9,<4.0"
+python-versions = ">=3.10,<4.0"
 files = [
-    {file = "zana-0.1.3-py3-none-any.whl", hash = "sha256:572a8276f5415d7d419d6e65f36cac4a0d1ffa3a1f713cb2b057544f9e134802"},
-    {file = "zana-0.1.3.tar.gz", hash = "sha256:ffb842294351d8aa7a7cbd95bd78efb1f5c704e36cca863a48631de4f966f461"},
+    {file = "zana-0.1.4-py3-none-any.whl", hash = "sha256:cc07eb42c6f1f80138bda0c4bd5a4d0659e3acc240f670fb2a1726a7127595fa"},
+    {file = "zana-0.1.4.tar.gz", hash = "sha256:c2e830ff0d355b1fbaf1e28e895ff03b604665548c1ce171eab3263fe4b801d8"},
 ]
 
 [package.dependencies]

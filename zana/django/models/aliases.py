@@ -1,18 +1,19 @@
+import copy
 import re
 import typing as t
 from abc import ABC
 from collections import ChainMap, abc, defaultdict
 from contextlib import suppress
 from enum import Enum
-from functools import reduce, wraps
-from itertools import chain
+from functools import partial, reduce, wraps
+from itertools import chain, repeat
 from logging import getLogger
 from operator import attrgetter, methodcaller
 from threading import Lock, RLock
 from types import FunctionType, GenericAlias, MethodType, new_class
 
 from typing_extensions import Self
-from zana.common import cached_attr
+from zana.common import cached_attr, pipeline
 from zana.types import NotSet
 
 from django.conf import settings
@@ -43,16 +44,23 @@ debug = settings.DEBUG and logger.debug
 
 
 def get_alias_field_names(model: type[_T_Model], default: _T_Default = None):
-    if issubclass(model, ImplementsAliases):
-        return model.__alias_fields__.keys()
+    if fields := _get_alias_fields(model):
+        return fields.keys()
     elif not issubclass(model, m.Model):
         raise TypeError(f"expected `Model` subclass. not `{model.__class__.__name__}`")
     return default
 
 
+def _get_alias_fields(model: type[_T_Model], default: _T_Default = None):
+    fields = getattr(model, "_alias_fields_", None)
+    if fields and isinstance(fields, ModelAliasFields):
+        return fields
+    return default
+
+
 def get_alias_fields(model: type[_T_Model], default: _T_Default = None):
-    if issubclass(model, ImplementsAliases):
-        return model.__alias_fields__
+    if fields := _get_alias_fields(model):
+        return fields
     elif not issubclass(model, m.Model):
         raise TypeError(f"expected `Model` subclass. not `{model.__class__.__name__}`")
     return default
@@ -72,6 +80,154 @@ class FallbackDict(dict[_KT, _VT | _FT], t.Generic[_KT, _FT, _VT]):
         return self.fallback
 
 
+class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
+    __slots__ = (
+        "model",
+        "_ready",
+        "_populated",
+        "_lock",
+        "fields",
+        "local",
+        "eager",
+        "deferred",
+        "selected",
+        "cached",
+        "dynamic",
+    )
+    _static_attrs_ = "model", "_populated", "_ready", "_lock"
+
+    _reset_attrs_ = tuple({*__slots__} - {*_static_attrs_})
+
+    model: t.Final[type[_T_Model]]
+
+    local: t.Final[abc.Mapping[str, "AliasField"]]
+    fields: t.Final[abc.Mapping[str, "AliasField"]]
+    eager: t.Final[abc.Mapping[str, "AliasField"]]
+    deferred: t.Final[abc.Mapping[str, "AliasField"]]
+    selected: t.Final[abc.Mapping[str, "AliasField"]]
+    cached: t.Final[abc.Mapping[str, "AliasField"]]
+
+    _populated: t.Final[bool]
+    _ready: t.Final[bool]
+    _lock: t.Final[RLock]
+
+    def __init__(self, model: type[_T_Model]) -> None:
+        self.model, self._lock, self._populated, self._ready = model, RLock(), False, False
+
+    def prepare(self):
+        with self._lock:
+            if not self._ready:
+                self._prepare()
+                self.clear()
+                self._ready = True
+
+    def _prepare(self):
+        cls = self.model
+        print("***** ")
+        print("***", cls._meta.label, cls._meta.proxy)
+        print("***** ")
+        if cls._meta.proxy:
+            for b in cls.__mro__[1:]:
+                if issubclass(b, ImplementsAliases) and (b._meta.proxy or b._meta.abstract):
+                    for n, af in b._alias_fields_.local.items():
+                        cls._meta.add_field(copy.deepcopy(af), True)
+
+    def populate(self):
+        with self._lock:
+            if not self._populated:
+                self._populate()
+                self._populated = True
+
+    def _populate(self):
+        eager, defer, select, cache, dynamic, local, fields = map(dict, repeat((), 7))
+        for field in sorted(self.model._meta.fields):
+            if isinstance(field, AliasField):
+                name, maps = field.name, [fields]
+                maps.append(cache if field.alias_cache else dynamic)
+                maps.append(defer if field.alias_defer else eager)
+                field.model == self.model and maps.append(local)
+                field.alias_select and maps.append(select)
+                [map.setdefault(name, field) for map in maps]
+
+        self.fields, self.eager, self.deferred, self.selected = fields, eager, defer, select
+        self.local, self.cached, self.dynamic = local, cache, dynamic
+
+    def clear(self):
+        with self._lock:
+            if self._populated:
+                for at in self._reset_attrs_:
+                    if hasattr(self, at):
+                        delattr(self, at)
+            self._populated = False
+
+    def __bool__(self):
+        return True
+
+    def __len__(self) -> int:
+        self._populated or self.populate()
+        return len(self.fields)
+
+    def __iter__(self):
+        self._populated or self.populate()
+        return iter(self.fields)
+
+    def __contains__(self, key: str):
+        self._populated or self.populate()
+        return key in self.fields
+
+    def __getitem__(self, key: str):
+        self._populated or self.populate()
+        return self.fields[key]
+
+    def __getattr__(self, attr: str):
+        if attr in self._static_attrs_ or self._populated:
+            raise AttributeError(attr)
+
+        self.populate()
+        return getattr(self, attr)
+
+    def __hash__(self) -> int:
+        return hash(self.model)
+
+    def __eq__(self, other: Self):
+        return other.__class__ is self.__class__ and other.model == self.model
+
+    def __ne__(self, other: Self):
+        return not other == self
+
+    def __repr__(self) -> str:
+        self._populated or self.populate()
+        attrs = [
+            f"{at} = {fn(getattr(self, at))!r}"
+            for at, fn in zip(
+                (
+                    "fields",
+                    "local",
+                    "eager",
+                    "deferred",
+                    "selected",
+                    "cached",
+                    "dynamic",
+                ),
+                repeat(pipeline([methodcaller("values"), list])),
+            )
+        ]
+        attr_str = ", ".join(attrs)
+        return f"{self.__class__.__name__}[{self.model._meta.label}]({attr_str})"
+
+    def keys(self):
+        self._populated or self.populate()
+        return self.fields.keys()
+
+    def values(self):
+        self._populated or self.populate()
+        return self.fields.values()
+
+    def items(self):
+        self._populated or self.populate()
+        return self.fields.items()
+
+
 class ImplementsAliasesManager(
     ABC, m.Manager[_T_Model] if t.TYPE_CHECKING else t.Generic[_T_Model]
 ):
@@ -80,25 +236,24 @@ class ImplementsAliasesManager(
     _initial_annotated_alias_fields_: t.Final[abc.Mapping[str, m.F]] = ...
 
 
-# class _AliasFieldDict:
-#     def __missing__(self, key):
-
-
 class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
-    __alias_fields__: ChainMap[str, "AliasField"]
+    _alias_fields_: t.Final[ModelAliasFields[Self]] = None
 
     @classmethod
-    def setup_model(self, cls: type[_T_Model]):
-        if not "__alias_fields__" in cls.__dict__:
-            cls.__alias_fields__ = ChainMap(
-                {},
-                *(
-                    m.maps[0]
-                    for b in cls.__mro__
-                    if isinstance(m := b.__dict__.get("__alias_fields__"), ChainMap)
-                ),
-            )
+    def setup(self, cls: type[Self]):
+        return self._setup(cls)
 
+    @classmethod
+    def _setup(self, cls: type[Self], skip=None):
+        if not "_alias_fields_" in cls.__dict__:
+            cls._alias_fields_ = ModelAliasFields(cls)
+
+        skip = skip or {cls}
+        for sub in cls.__subclasses__():
+            if not (sub in skip or skip.add(sub)):
+                ImplementsAliases._setup(sub, skip)
+
+        cls._alias_fields_.clear()
         return self.register(cls)
 
 
@@ -227,7 +382,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         "getter": "alias_fget",
         "setter": "alias_fset",
         "deleter": "alias_fdel",
-        "annotate": "alias_annotate",
+        "select": "alias_select",
         "path": "alias_path",
         "cache": "alias_cache",
         "defer": "alias_defer",
@@ -325,12 +480,12 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return m.F(self.name)
 
     @cached_attr
-    def alias_annotate(self):
+    def alias_select(self):
         return False
 
     @cached_attr
     def alias_cache(self):
-        return not not self.alias_annotate or not (self.alias_fset or self.alias_path)
+        return not not self.alias_select or not (self.alias_fset or self.alias_path)
 
     @cached_attr
     def alias_defer(self):
@@ -368,8 +523,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
 
         super().contribute_to_class(cls, name, private_only)
 
-        cls = ImplementsAliases.setup_model(cls)
-        cls.__alias_fields__[name] = self
+        cls = ImplementsAliases.setup(cls)
 
         if descriptor := self.get_descriptor():
             if hasattr(descriptor, "__set_name__"):
@@ -404,7 +558,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         ]
 
     def _check_alias_setter(self):
-        path, annotate, cache, errors = self.alias_path, self.alias_annotate, self.alias_cache, []
+        path, annotate, cache, errors = self.alias_path, self.alias_select, self.alias_cache, []
         if self.alias_fset is True and (not path or annotate or cache):
             label = f"{self.__class__.__qualname__}"
             if annotate:
@@ -527,7 +681,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
             if (path := self.alias_path) is not None:
                 fget = attrgetter(path)
             else:
-                annotate, defer, name = self.alias_annotate, self.alias_defer, self.name
+                annotate, defer, name = self.alias_select, self.alias_defer, self.name
 
                 def fget(self: _T_Model):
                     nonlocal name, defer, annotate
@@ -555,14 +709,14 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return fget or None
 
     def get_setter(self):
-        attr, func = self.alias_path, self.alias_fset
-        if func is True and attr:
-            *path, name = attr.split(".")
+        path, func = self.alias_path, self.alias_fset
+        if func is True and path:
+            *src, attr = path.split(".")
 
             def func(self: m.Model, value):
-                nonlocal path, name
-                obj = reduce(getattr, path, self) if path else self
-                setattr(obj, name, value)
+                nonlocal src, attr
+                obj = reduce(getattr, src, self) if src else self
+                setattr(obj, attr, value)
 
         return func or None
 
@@ -573,6 +727,8 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
 @receiver(m.signals.class_prepared, weak=False)
 def __on_class_prepared(sender: type[_T_Model], **kwds):
     if issubclass(sender, ImplementsAliases):
+        ImplementsAliases.setup(sender)._alias_fields_.prepare()
+
         debug and debug(f"-> {sender._meta.label:<18} prepared ...")
 
 
@@ -639,9 +795,7 @@ class _Patcher:
                     model = self.model
                     aliases = get_alias_fields(model, {})
                     return {
-                        n: a.f
-                        for n, a in aliases.items()
-                        if not a.alias_defer and a.alias_annotate
+                        n: a.f for n, a in aliases.items() if not a.alias_defer and a.alias_select
                     }
 
                 _initial_alias_fields_.__set_name__(cls, "_initial_alias_fields_")
@@ -708,7 +862,7 @@ class _Patcher:
                             and (aka := opts.get_field(n))
                             and kwds.setdefault(n, aka.alias_annotation)
                             and (
-                                aka.alias_annotate
+                                aka.alias_select
                                 and annotate.setdefault(n, m.F(n) if a is n else a),
                             )
                         )

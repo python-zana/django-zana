@@ -17,11 +17,11 @@ class AliasesConfig(AppConfig):
                 yield t.cast(type[cls] | type[ImplementsAliases], sc)
                 yield from subclasses(sc)
 
-        # for cls in subclasses(BaseModel):
-        #     print(f"\n{cls._meta.label}")
-        #     print(f" + aliases:", *cls.__alias_fields__, sep="\n    - ")
-        #     print(
-        #         f" + fields:",
-        #         *(f"{f'{f!s}':<32}: {id(f)}" for f in cls._meta.get_fields(include_parents=True)),
-        #         sep="\n    - ",
-        #     )
+        for cls in subclasses(BaseModel):
+            print(f"\n{cls._meta.label}")
+            print(f" + aliases:", *cls._alias_fields_, sep="\n    - ")
+            print(
+                f" + fields:",
+                *(f"{f'{f!s}':<32}: {id(f)}" for f in cls._meta.get_fields(include_parents=False)),
+                sep="\n    - ",
+            )

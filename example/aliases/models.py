@@ -42,9 +42,7 @@ _T = t.TypeVar("_T", bound="BaseModel")
 
 def rand_date():
     now = timezone.now()
-    rt = now.replace(
-        year=randint(now.year - 5, now.year), month=randint(1, 12), day=randint(1, 28)
-    )
+    rt = now.replace(year=randint(now.year - 5, now.year), month=randint(1, 12), day=randint(1, 28))
     return now.replace(year=rt.year - 1) if rt > now else rt
 
 
@@ -102,7 +100,7 @@ class Publisher(BaseModel):
     num_books: Decimal = AliasField[m.IntegerField](m.Count("books__pk"))
 
     rating: Decimal = AliasField[m.DecimalField](
-        m.Avg("books__rating"), annotate=True, default=ZERO_DEC, max_digits=20, decimal_places=2
+        m.Avg("books__rating"), select=True, default=ZERO_DEC, max_digits=20, decimal_places=2
     )
 
     income: Decimal = AliasField()
@@ -132,7 +130,7 @@ class Author(BaseModel, PolymorphicModel):
 
     rating: Decimal = AliasField[m.DecimalField](
         m.Avg("books__rating"),
-        annotate=True,
+        select=True,
         default=ZERO_DEC,
         max_digits=20,
         decimal_places=2,
@@ -248,10 +246,7 @@ class Book(BaseModel, PolymorphicModel):
 
         if isinstance(c_authors, int):
             c_authors = Counter(
-                {
-                    a: randint(1, c_publishers.total() // 2)
-                    for a in Author.create_samples(c_authors)
-                }
+                {a: randint(1, c_publishers.total() // 2) for a in Author.create_samples(c_authors)}
             )
 
         publishers, max_rating = list(c_publishers.elements()), max(Rating)
