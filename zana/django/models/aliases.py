@@ -210,7 +210,7 @@ class ConcreteTypeRegistry(type):
                 name = f"{base}_{i:03}" if i else base
                 if name not in n2t:
                     return name
-            else:
+            else:  # pragma: no cover
                 raise RuntimeError(f"unable to find a unique qualname for {name[:-3]!r}")
 
 
@@ -274,7 +274,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return GenericAlias(cls, params)
 
     def __new__(cls: type[Self], *a, internal: _T_Field = None, **kw) -> _T | Self | _T_Field:
-        if internal is not None and cls is AliasField:
+        if internal is not None and cls._internal_alias_type_ is None:
             cls = cls.types[internal if isinstance(internal, type) else internal.__class__]
 
         self: _T | Self | _T_Field = object.__new__(cls)
