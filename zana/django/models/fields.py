@@ -18,7 +18,7 @@ _GT = t.TypeVar("_GT")
 _T_Field = t.TypeVar("_T_Field", bound="m.Field[m.Combinable | t.Any, t.Any]")
 
 
-class PseudoField(m.Field, t.Generic[_GT, _ST]):
+class PseudoField(m.Field, t.Generic[_GT, _ST]):  # pragma: no cover
     """A field type that does not directly correspond to a database column.
 
     Serves as a base class to fields such as `AliasField`
