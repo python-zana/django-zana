@@ -123,9 +123,6 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
 
     def _prepare(self):
         cls = self.model
-        print("***** ")
-        print("***", cls._meta.label, cls._meta.proxy)
-        print("***** ")
         if cls._meta.proxy:
             for b in cls.__mro__[1:]:
                 if issubclass(b, ImplementsAliases) and (b._meta.proxy or b._meta.abstract):
