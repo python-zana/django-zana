@@ -265,9 +265,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         pass
 
     def __class_getitem__(cls, params: tuple[type[_T_Field], ...] | type[_T_Field]):
-        if not params:
-            return cls
-        elif not isinstance(params, (tuple, list)):
+        if not isinstance(params, (tuple, list)):
             params = (params,)
 
         if cls._internal_alias_type_ is None:
