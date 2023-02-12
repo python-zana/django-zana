@@ -19,6 +19,7 @@ class AliasesConfig(AppConfig):
 
         for cls in subclasses(BaseModel):
             print(f"\n{cls._meta.label}")
+            print(f" + local:", *cls._alias_fields_, sep="\n    - ")
             print(f" + aliases:", *cls._alias_fields_, sep="\n    - ")
             print(
                 f" + fields:",

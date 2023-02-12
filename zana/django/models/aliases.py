@@ -1,15 +1,13 @@
 import copy
-import re
 import typing as t
 from abc import ABC
-from collections import ChainMap, abc, defaultdict
+from collections import abc
 from contextlib import suppress
-from enum import Enum
-from functools import partial, reduce, wraps
+from functools import reduce, wraps
 from itertools import chain, repeat
 from logging import getLogger
 from operator import attrgetter, methodcaller
-from threading import Lock, RLock
+from threading import RLock
 from types import FunctionType, GenericAlias, MethodType, new_class
 
 from typing_extensions import Self
@@ -116,10 +114,12 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
     def _prepare(self):
         cls = self.model
         if cls._meta.proxy:
+            concrete = cls._meta.concrete_model
             for b in cls.__mro__[1:]:
-                if issubclass(b, ImplementsAliases) and (b._meta.proxy or b._meta.abstract):
-                    for n, af in b._alias_fields_.local.items():
-                        cls._meta.add_field(copy.deepcopy(af), True)
+                if issubclass(b, ImplementsAliases):
+                    if b._meta.proxy or (b._meta.abstract and not issubclass(concrete, b)):
+                        for n, af in b._alias_fields_.local.items():
+                            cls._meta.add_field(copy.deepcopy(af), True)
 
     def populate(self):
         with self._lock:
@@ -129,12 +129,13 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
 
     def _populate(self):
         eager, defer, select, cache, dynamic, local, fields = map(dict, repeat((), 7))
+        lf = self.model._meta.local_fields
         for field in sorted(self.model._meta.fields):
             if isinstance(field, AliasField):
                 name, maps = field.name, [fields]
                 maps.append(cache if field.alias_cache else dynamic)
                 maps.append(defer if field.alias_defer else eager)
-                field.model == self.model and maps.append(local)
+                field.model is self.model and maps.append(local)
                 field.alias_select and maps.append(select)
                 [map.setdefault(name, field) for map in maps]
 

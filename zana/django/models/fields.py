@@ -1,8 +1,6 @@
 import copy
-import re
 import typing as t
 from operator import attrgetter
-from types import new_class
 
 from typing_extensions import Self
 from zana.common import cached_attr
