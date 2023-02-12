@@ -100,7 +100,12 @@ class Publisher(BaseModel):
     num_books: Decimal = AliasField[m.IntegerField](m.Count("books__pk"))
 
     rating: Decimal = AliasField[m.DecimalField](
-        m.Avg("books__rating"), select=True, default=ZERO_DEC, max_digits=20, decimal_places=2
+        m.Avg("books__rating"),
+        select=True,
+        default=ZERO_DEC,
+        cast=True,
+        max_digits=20,
+        decimal_places=2,
     )
 
     income: Decimal = AliasField()
@@ -131,6 +136,7 @@ class Author(BaseModel, PolymorphicModel):
     rating: Decimal = AliasField[m.DecimalField](
         m.Avg("books__rating"),
         select=True,
+        cast=True,
         default=ZERO_DEC,
         max_digits=20,
         decimal_places=2,

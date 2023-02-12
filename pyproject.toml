@@ -64,7 +64,7 @@ xfail_strict= "True"
 log_level = "DEBUG"
 python_files = "tests.py test.py test_*.py"
 python_classes = "test_* Test_*"
-python_functions = "test_*"
+python_functions = "test_* test"
 DJANGO_SETTINGS_MODULE = "example.settings"
 
 

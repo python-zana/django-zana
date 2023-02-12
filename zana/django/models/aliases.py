@@ -16,6 +16,7 @@ from zana.types import NotSet
 
 from django.conf import settings
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
@@ -41,18 +42,10 @@ logger = getLogger(__name__)
 debug = settings.DEBUG and logger.debug
 
 
-def _get_alias_fields(model: type[_T_Model], default: _T_Default = None):
+def get_alias_fields(model: type[_T_Model], default: _T_Default = None):
     fields = getattr(model, "_alias_fields_", None)
     if fields and isinstance(fields, ModelAliasFields):
         return fields
-    return default
-
-
-def get_alias_fields(model: type[_T_Model], default: _T_Default = None):
-    if fields := _get_alias_fields(model):
-        return fields
-    elif not issubclass(model, m.Model):
-        raise TypeError(f"expected `Model` subclass. not `{model.__class__.__name__}`")
     return default
 
 
@@ -116,10 +109,16 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
         if cls._meta.proxy:
             concrete = cls._meta.concrete_model
             for b in cls.__mro__[1:]:
+                own = self.fields
                 if issubclass(b, ImplementsAliases):
                     if b._meta.proxy or (b._meta.abstract and not issubclass(concrete, b)):
                         for n, af in b._alias_fields_.local.items():
-                            cls._meta.add_field(copy.deepcopy(af), True)
+                            if n not in own:
+                                cls._meta.add_field(copy.deepcopy(af), True)
+                            elif own[n] != af:
+                                raise ImproperlyConfigured(
+                                    f"cannot override AliasField `{af!s}` in `{cls._meta.label}`"
+                                )
 
     def populate(self):
         with self._lock:
@@ -170,7 +169,7 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
         return self.fields[key]
 
     def __getattr__(self, attr: str):
-        if attr in self._static_attrs_ or self._populated:
+        if attr in self._static_attrs_ or self._populated:  # pragma: no cover
             raise AttributeError(attr)
 
         self.populate()
@@ -230,21 +229,13 @@ class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
     _alias_fields_: t.Final[ModelAliasFields[Self]] = None
 
     @classmethod
-    def setup(self, cls: type[Self]):
-        return self._setup(cls)
-
-    @classmethod
-    def _setup(self, cls: type[Self], skip=None):
+    def setup(self, cls):
         if not "_alias_fields_" in cls.__dict__:
             cls._alias_fields_ = ModelAliasFields(cls)
 
-        skip = skip or {cls}
-        for sub in cls.__subclasses__():
-            if not (sub in skip or skip.add(sub)):
-                ImplementsAliases._setup(sub, skip)
-
+        self.register(cls)
         cls._alias_fields_.clear()
-        return self.register(cls)
+        return cls
 
 
 class ExpressionBuilder(t.Generic[_T]):
@@ -267,8 +258,8 @@ class ExpressionBuilder(t.Generic[_T]):
     def __getattr__(self, name: str):
         return self.__class__(self.__alias__, self.__origin__, *self.__args__, name)
 
-    def __getitem__(self, name: str):
-        return self.__class__(self.__alias__, self.__origin__, *self.__args__, name)
+    # def __getitem__(self, name: str):
+    #     return self.__class__(self.__alias__, self.__origin__, *self.__args__, name)
 
     def contribute_to_class(self, cls: t.Type[_T_Model], name: str, *a, **kw):
         return self().contribute_to_class(cls, name, *a, **kw)
@@ -437,7 +428,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         setter: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool] = None,
         deleter: abc.Callable[[_T_Model], t.NoReturn] = None,
         *,
-        annotate: bool = None,
+        select: bool = None,
         path: str = None,
         doc: str = None,
         cache: bool = None,
@@ -489,8 +480,8 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
     def alias_path(self):
         if isinstance(expr := self.alias_expression, str):
             return expr.replace("__", ".")
-        elif isinstance(expr, m.F):
-            return expr.name.replace("__", ".")
+        # elif isinstance(expr, m.F):
+        #     return expr.name.replace("__", ".")
 
     def get_internal_alias_field(self, *, deconstruct: bool = None):
         if (cls := self._internal_alias_type_) is not None:
@@ -520,15 +511,6 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
                 descriptor.__set_name__(cls, self.attname)
             setattr(cls, self.attname, descriptor)
 
-        setattr(self.__class__, "_p_Stack", getattr(self, "_p_Stack", [None]))
-        if self._p_Stack[-1] != cls._meta.label:
-            self._p_Stack.append(cls._meta.label)
-            debug and debug(f"\n{cls._meta.label+' :':<24}")
-
-        debug and debug(
-            f"  - {self.creation_counter}) {name:<20} {self.get_internal_type():<20} {id(self)}"
-        )
-
     def deconstruct(self):
         k2a, ia, defaults = self._KWARGS_TO_ATTRS_, self._init_args_, self._INIT_DEFAULTS_
         name, path = t.cast(tuple[str, str], super().deconstruct()[:2])
@@ -548,15 +530,15 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         ]
 
     def _check_alias_setter(self):
-        path, annotate, cache, errors = self.alias_path, self.alias_select, self.alias_cache, []
-        if self.alias_fset is True and (not path or annotate or cache):
+        path, select, cache, errors = self.alias_path, self.alias_select, self.alias_cache, []
+        if self.alias_fset is True and (not path or select or cache):
             label = f"{self.__class__.__qualname__}"
-            if annotate:
+            if select:
                 errors += [
                     checks.Error(
-                        f"Annotated {label} cannot have an implicit setter=True",
+                        f"Select {label} cannot have an implicit setter=True",
                         hint=(
-                            "Set annotate=False, use a custom `setter` function, "
+                            "Set select=False, use a custom `setter` function, "
                             "or remove setter=True argument on the field."
                         ),
                         obj=self,
@@ -580,7 +562,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
                     checks.Error(
                         f"{label}s with setter=True must have a `path`.",
                         hint=(
-                            "Explicitly set `attr`, use a custom `setter` function, "
+                            "Explicitly set `path`, use a custom `setter` function, "
                             "or remove setter=True argument on the field."
                         ),
                         obj=self,
@@ -718,8 +700,6 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
 def __on_class_prepared(sender: type[_T_Model], **kwds):
     if issubclass(sender, ImplementsAliases):
         ImplementsAliases.setup(sender)._alias_fields_.prepare()
-
-        debug and debug(f"-> {sender._meta.label:<18} prepared ...")
 
 
 class _Patcher:

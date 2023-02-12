@@ -12,7 +12,7 @@ pytestmark = [
 ]
 
 
-class test_alias:
+class test_AliasField:
     max_rating = max(Rating)
 
     def setup_method(self):
@@ -64,7 +64,7 @@ class test_alias:
 
     def test_queryset(self):
         books = Book.create_samples()
-        authors = list(Author.objects.alias("rating").all())
+        authors: list[Author] = list(Author.objects.alias("rating").all())
 
         for author in authors:
             e_books = list(author.books.filter(version__isnull=False).all())

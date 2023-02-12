@@ -9,6 +9,7 @@ from . import aliases
 
 _T_Alias = aliases._T
 _T_AliasExpr = aliases._T_Expr
+_T_AliasField = aliases._T_Field
 _T_AliasModel = aliases._T_Model
 
 class AliasField(aliases.AliasField[_T_Alias]):
@@ -19,12 +20,12 @@ class AliasField(aliases.AliasField[_T_Alias]):
         setter: t.Union[abc.Callable[[_T_AliasModel, _T_Alias], t.NoReturn], bool] = None,
         deleter: abc.Callable[[_T_AliasModel], t.NoReturn] = None,
         *,
-        annotate: bool = None,
-        attr: str = None,
+        select: bool = None,
+        path: str = None,
         doc: str = None,
-        default=...,
         cache: bool = None,
         defer: bool = None,
-        output_field: m.Field = None,
+        cast: bool = None,
+        internal: _T_AliasField = None,
         **kwds,
     ) -> _T_Alias | Self: ...

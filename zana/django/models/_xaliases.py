@@ -11,6 +11,8 @@ from types import MethodType
 from typing_extensions import Self
 from zana.common import NotSet, cached_attr
 
+from django.apps import apps
+from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
 from django.db.models.expressions import Combinable
@@ -28,6 +30,22 @@ _T_Expr = t.Union[
     t.Callable[[_T_Model], t.Union[Combinable, str, m.Field, "alias"]],
 ]
 _T_Func = FunctionType | staticmethod | classmethod | MethodType | type
+
+
+@checks.register(checks.Tags.models, checks.Tags.compatibility)
+def deprecation_warning_check(app_configs, **kwargs):
+    errors = [
+        checks.Warning(
+            f"`{__package__}.alias()` fields have been deprecated",
+            hint=f"Use new `{__package__}:AliasField() instead.",
+            obj=f"{cls._meta.label}.{aka}",
+            id="zana.W001",
+        )
+        for cls in apps.get_models()
+        for aliases in [get_query_aliases(cls, ())]
+        for aka in aliases
+    ]
+    return errors
 
 
 def get_query_aliases(
