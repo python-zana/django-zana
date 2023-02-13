@@ -502,7 +502,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         if private_only is None:
             private_only = cls._meta.proxy
 
-        super().contribute_to_class(cls, name, private_only)
+        super().contribute_to_class(cls, name, private_only=private_only)
 
         cls = ImplementsAliases.setup(cls)
 
@@ -636,11 +636,11 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return expr
 
     def get_alias_annotation(self):
-        cast, expr = self.alias_cast, self.get_alias_expression()
-        if not cast:
+        cast, expr, type = self.alias_cast, self.get_alias_expression(), self._internal_alias_type_
+        if not cast and type:
             expr = m.ExpressionWrapper(expr, self)
         if self.has_default() and (default := self.get_default()) is not None:
-            expr = Coalesce(expr, m.Value(default, self))
+            expr = Coalesce(expr, m.Value(default, *((self,) if type else ())))
 
         if internal := cast and self.get_internal_alias_field():
             expr = m.functions.Cast(expr, internal)
