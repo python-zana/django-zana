@@ -189,9 +189,16 @@ class Book(BaseModel, PolymorphicModel):
     num_sold: int = m.IntegerField(default=rand_num_sold)
     published_on = m.DateTimeField(null=True, default=rand_date)
 
-    year = AliasField[m.IntegerField](m.F("published_on__year"), defer=True)
+    def default_data():
+        return {"tags": ["default"], "pages": randint(100, 1000) // 50 * 50}
+
+    data = m.JSONField(default=default_data)
+
+    year = AliasField[m.IntegerField](m.F("published_on__year"))
 
     published_by = AliasField(setter=True).at(Self).publisher.name
+    tags = AliasField(setter=True).at(Self).data["tags"]
+    tag = AliasField(setter=True).at(Self).data["tags"][0]
 
     commission: Decimal = AliasField[m.DecimalField](
         m.F("price") * m.F("publisher__commission"), max_digits=20, decimal_places=2, cache=False

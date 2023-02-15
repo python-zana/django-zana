@@ -1,27 +1,32 @@
 import copy
+import math
+import operator
 import typing as t
 from abc import ABC
 from collections import abc
 from contextlib import suppress
-from functools import reduce, wraps
+from functools import wraps
 from itertools import chain, repeat
 from logging import getLogger
-from operator import attrgetter, methodcaller
+from operator import methodcaller, setitem
 from threading import RLock
 from types import FunctionType, GenericAlias, MethodType, new_class
 
 from typing_extensions import Self
 from zana.common import cached_attr, pipeline
 from zana.types import NotSet
+from zana.types.enums import StrEnum
 
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
 from django.db.models.query_utils import FilteredRelation
 from django.dispatch import receiver
+from zana.django import operator as op
 
 _T = t.TypeVar("_T")
 _KT = t.TypeVar("_KT")
@@ -108,7 +113,7 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
         cls = self.model
         if cls._meta.proxy:
             concrete = cls._meta.concrete_model
-            for b in cls.__mro__[1:]:
+            for b in cls.__mro__[1:][::-1]:
                 own = self.fields
                 if issubclass(b, ImplementsAliases):
                     if b._meta.proxy or (b._meta.abstract and not issubclass(concrete, b)):
@@ -132,10 +137,10 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
         for field in sorted(self.model._meta.fields):
             if isinstance(field, AliasField):
                 name, maps = field.name, [fields]
-                maps.append(cache if field.alias_cache else dynamic)
-                maps.append(defer if field.alias_defer else eager)
+                maps.append(cache if field.cache else dynamic)
+                maps.append(defer if field.defer else eager)
                 field.model is self.model and maps.append(local)
-                field.alias_select and maps.append(select)
+                field.select and maps.append(select)
                 [map.setdefault(name, field) for map in maps]
 
         self.fields, self.eager, self.deferred, self.selected = fields, eager, defer, select
@@ -244,28 +249,49 @@ class ExpressionBuilder(t.Generic[_T]):
         "__args__",
         "__origin__",
     )
-    __alias__: "AliasField[_T]"
+    __alias__: t.Final["AliasField[_T]"]
+    __args__: t.Final[tuple[(op.AccessOperator, str | None)]]
 
-    def __new__(cls, alias: "AliasField[_T]", origin, *args) -> Self:
+    if t.TYPE_CHECKING:
+        __alias__ = __args__ = ...
+
+    def __new__(cls, alias: "AliasField[_T]", *args) -> Self:
         self = object.__new__(cls)
-        self.__alias__, self.__args__, self.__origin__ = alias, args, origin
+        self.__alias__, self.__args__ = alias, args
         return self
 
-    def __call__(self) -> "AliasField":
-        args = self.__args__
-        return self.__alias__.alias_evolve(expression=m.F("__".join(args)), path=".".join(args))
+    def __build__(self) -> "AliasField":
+        if args := self.__args__:
+            alias = self.__alias__
+            expression, src = alias.expression, (a for a, _ in args)
+            if not alias.has_expression():
+                names = [e for _, e in args]
+                if None not in names:
+                    expression = m.F("__".join(names))
+
+            return alias.alias_evolve(expression=expression, source=op.Accessor(*src))
+        raise TypeError(f"cannot build empty expression")
+
+    def __extend__(self, *args):
+        return self.__class__(self.__alias__, *self.__args__, *args)
 
     def __getattr__(self, name: str):
-        return self.__class__(self.__alias__, self.__origin__, *self.__args__, name)
+        return self.__extend__((op.Attr(name), str(name)))
 
-    # def __getitem__(self, name: str):
-    #     return self.__class__(self.__alias__, self.__origin__, *self.__args__, name)
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return self.__extend__((op.Slice(key), None))
+        else:
+            return self.__extend__((op.Item(key), str(key)))
+
+    def __call__(self, *args, **kwargs):
+        return self.__extend__((op.Call(args, kwargs), None))
 
     def contribute_to_class(self, cls: t.Type[_T_Model], name: str, *a, **kw):
-        return self().contribute_to_class(cls, name, *a, **kw)
+        return self.__build__().contribute_to_class(cls, name, *a, **kw)
 
 
-class BaseAliasDescriptor(property):
+class BaseAliasDescriptor:
     field: "AliasField" = None
 
     def __init__(self, field: "AliasField") -> None:
@@ -359,15 +385,15 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
     ]
 
     _KWARGS_TO_ATTRS_ = {
-        "expression": "alias_expression",
-        "getter": "alias_fget",
-        "setter": "alias_fset",
-        "deleter": "alias_fdel",
-        "select": "alias_select",
-        "path": "alias_path",
-        "cache": "alias_cache",
-        "defer": "alias_defer",
-        "cast": "alias_cast",
+        "expression": "expression",
+        "getter": "fget",
+        "setter": "fset",
+        "deleter": "fdel",
+        "select": "select",
+        "source": "_source",
+        "cache": "cache",
+        "defer": "defer",
+        "cast": "cast",
     }
     _INIT_DEFAULTS_ = FallbackDict(
         NotSet,
@@ -381,18 +407,19 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
     )
 
     name: str
-    alias_expression: _T_Expr = None
+    expression: _T_Expr = None
     _init_args_: t.Final[set]
 
     verbose_name: str
+    _source: str | op.Accessor = None
 
     _cached_descriptor_class_ = CachedAliasDescriptor
     _dynamic_descriptor_class_ = DynamicAliasDescriptor
 
-    alias_cast: bool
-    alias_fget: abc.Callable[[_T_Model], _T] = None
-    alias_fset: abc.Callable[[_T_Model, _T], t.NoReturn] = None
-    alias_fdel: abc.Callable[[_T_Model], t.NoReturn] = None
+    cast: bool
+    fget: abc.Callable[[_T_Model], _T] = None
+    fset: abc.Callable[[_T_Model, _T], t.NoReturn] = None
+    fdel: abc.Callable[[_T_Model], t.NoReturn] = None
 
     _internal_alias_type_: t.Final[type[_T_Field]] = None
 
@@ -429,8 +456,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         deleter: abc.Callable[[_T_Model], t.NoReturn] = None,
         *,
         select: bool = None,
-        path: str = None,
-        doc: str = None,
+        source: str | op.Accessor = None,
         cache: bool = None,
         defer: bool = None,
         cast: bool = None,
@@ -461,29 +487,34 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return m.F(self.name)
 
     @cached_attr
-    def alias_select(self):
+    def select(self):
         return False
 
     @cached_attr
-    def alias_cache(self):
-        return not not self.alias_select or not (self.alias_fset or self.alias_path)
+    def cache(self):
+        return not not self.select or not (self.fset or self.source)
 
     @cached_attr
-    def alias_defer(self):
+    def defer(self):
         return False
 
     @cached_attr
-    def alias_annotation(self):
-        return self.get_alias_annotation()
+    def non_db_attrs(self):
+        return self.deconstruct()[-1].keys()
 
     @cached_attr
-    def alias_path(self):
-        if isinstance(expr := self.alias_expression, str):
-            return expr.replace("__", ".")
-        # elif isinstance(expr, m.F):
-        #     return expr.name.replace("__", ".")
+    def source(self):
+        src = self._source
+        if isinstance(src, op.Accessor):
+            return src
+        elif isinstance(src, str):
+            return op.Accessor(op.Attr(src))
+        elif src is not None:
+            raise TypeError(f"`{self!s}.source` expected `str` or `Accessor` but got {type(src)}")
+        if isinstance(expr := self.expression, str):
+            return op.Accessor(op.Attr(expr.replace("__", ".")))
 
-    def get_internal_alias_field(self, *, deconstruct: bool = None):
+    def get_internal_field(self, *, deconstruct: bool = None):
         if (cls := self._internal_alias_type_) is not None:
             *_, args, kwds = cls.deconstruct(self)
             if deconstruct is True:
@@ -517,10 +548,11 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
 
         args, kwargs = [], {k: v for k in ia for v in (getattr(self, k2a[k]),) if v != defaults[k]}
         if self._internal_alias_type_:
-            kwargs["internal"] = self.get_internal_alias_field(deconstruct=True)
+            kwargs["internal"] = self.get_internal_field(deconstruct=True)
 
         if path.startswith(f"{__name__}.AliasField.types."):
-            path = f"{__name__}.AliasField"
+            path = f"{__package__}.AliasField"
+        path = path.replace(f"{__name__}.AliasField", f"{__package__}.AliasField", 1)
         return name, path, args, kwargs
 
     def check(self, **kwargs):
@@ -530,8 +562,8 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         ]
 
     def _check_alias_setter(self):
-        path, select, cache, errors = self.alias_path, self.alias_select, self.alias_cache, []
-        if self.alias_fset is True and (not path or select or cache):
+        source, select, cache, errors = self.source, self.select, self.cache, []
+        if self.fset is True and (not source or select or cache):
             label = f"{self.__class__.__qualname__}"
             if select:
                 errors += [
@@ -560,9 +592,9 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
             else:
                 errors += [
                     checks.Error(
-                        f"{label}s with setter=True must have a `path`.",
+                        f"{label}s with setter=True must have a `source`.",
                         hint=(
-                            "Explicitly set `path`, use a custom `setter` function, "
+                            "Explicitly set `source`, use a custom `setter` function, "
                             "or remove setter=True argument on the field."
                         ),
                         obj=self,
@@ -573,7 +605,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return errors
 
     def _check_alias_expression(self):
-        cast, internal, errors = self.alias_cast, self._internal_alias_type_, []
+        cast, internal, errors = self.cast, self._internal_alias_type_, []
         label = self.__class__.__name__
         if cast and internal is None:
             errors += [
@@ -595,7 +627,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
             return cls(self)
 
     def get_descriptor_class(self):
-        return getattr(self, f"_{'cached' if self.alias_cache else 'dynamic'}_descriptor_class_")
+        return getattr(self, f"_{'cached' if self.cache else 'dynamic'}_descriptor_class_")
 
     def alias_evolve(self, arg=(), **kwds):
         if isinstance(arg, abc.Mapping):
@@ -607,8 +639,11 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
                 ia.add(k)
         return self
 
+    if t.TYPE_CHECKING:
+        alias_evolve: type[Self]
+
     def at(self, src: _T_Src) -> _T_Src:
-        return ExpressionBuilder[_T](self, src)
+        return ExpressionBuilder[_T](self)
 
     def annotation(self, expression: _T_Expr):
         self.alias_evolve(expression=expression)
@@ -626,8 +661,11 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         self.alias_evolve(deleter=fdel)
         return fdel
 
-    def get_alias_expression(self) -> abc.Callable[[], m.expressions.Combinable]:
-        expr = self.alias_expression
+    def has_expression(self):
+        return self.expression is not None
+
+    def get_expression(self) -> abc.Callable[[], m.expressions.Combinable]:
+        expr = self.expression
         if isinstance(expr, _T_Func):
             expr = expr()
         if isinstance(expr, str):
@@ -635,34 +673,34 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
 
         return expr
 
-    def get_alias_annotation(self):
-        cast, expr, type = self.alias_cast, self.get_alias_expression(), self._internal_alias_type_
-        if not cast and type:
-            expr = m.ExpressionWrapper(expr, self)
+    def get_annotation(self):
+        cast, expr, internal = self.cast, self.get_expression(), self.get_internal_field()
+        if not cast and internal:
+            expr = m.ExpressionWrapper(expr, internal)
         if self.has_default() and (default := self.get_default()) is not None:
-            expr = Coalesce(expr, m.Value(default, *((self,) if type else ())))
+            expr = Coalesce(expr, m.Value(default, *filter(None, (internal,))))
 
-        if internal := cast and self.get_internal_alias_field():
+        if cast and internal:
             expr = m.functions.Cast(expr, internal)
 
         return expr
 
     def get_getter(self):
-        fget = self.alias_fget
+        fget = self.fget
         if fget in (True, None):
-            if (path := self.alias_path) is not None:
-                fget = attrgetter(path)
+            if (source := self.source) is not None:
+                fget = source.getter
             else:
-                annotate, defer, name = self.alias_select, self.alias_defer, self.name
+                select, defer, name = self.select, self.defer, self.name
 
                 def fget(self: _T_Model):
-                    nonlocal name, defer, annotate
+                    nonlocal name, defer, select
                     if self._state.adding:
                         raise AttributeError(name)
                     qs = self._meta.base_manager.filter(pk=self.pk)
                     if defer:
-                        qs = qs = qs.alias(name)
-                    if annotate is False:
+                        qs = qs.alias(name)
+                    if not select:
                         qs = qs.annotate(name)
                     return qs.values_list(name, flat=True).get()
 
@@ -681,19 +719,16 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         return fget or None
 
     def get_setter(self):
-        path, func = self.alias_path, self.alias_fset
-        if func is True and path:
-            *src, attr = path.split(".")
-
-            def func(self: m.Model, value):
-                nonlocal src, attr
-                obj = reduce(getattr, src, self) if src else self
-                setattr(obj, attr, value)
-
+        source, func = self.source, self.fset
+        if func is True and source:
+            func = source.setter
         return func or None
 
     def get_deleter(self):
-        return self.alias_fdel
+        source, func = self.source, self.fdel
+        if func is True and source:
+            func = source.deleter
+        return func or None
 
 
 @receiver(m.signals.class_prepared, weak=False)
@@ -759,12 +794,12 @@ class _Patcher:
                 @cached_attr
                 def _initial_alias_fields_(self: m.Manager[_T_Model]):
                     if aliases := get_alias_fields(self.model):
-                        return {n: a.alias_annotation for n, a in aliases.eager.items()}
+                        return {n: a.get_annotation() for n, a in aliases.eager.items()}
 
                 @cached_attr
                 def _initial_annotated_alias_fields_(self: m.Manager[_T_Model]):
                     if aliases := get_alias_fields(self.model):
-                        return {n: a.f for n, a in aliases.selected.items() if not a.alias_defer}
+                        return {n: a.f for n, a in aliases.selected.items() if not a.defer}
 
                 _initial_alias_fields_.__set_name__(cls, "_initial_alias_fields_")
                 _initial_annotated_alias_fields_.__set_name__(
@@ -794,9 +829,8 @@ class _Patcher:
                                 if isinstance(a, m.F)
                                 else None
                             )
-                            and n not in kwds
                             and n in aliases
-                            and (kwds.setdefault(n, m.F(n) if a is n else a),)
+                            and kwds.setdefault(n, (an := m.F(n) if a is n else a)) is an
                         )
                     ]
                 return orig_annotate(self, *args, **kwds)
@@ -812,7 +846,6 @@ class _Patcher:
                 nonlocal orig_alias
                 if aliases := args and get_alias_fields(self.model):
                     aka: AliasField
-                    model, opts = self.model, self.model._meta
                     annotate = {}
                     args = [
                         a
@@ -825,14 +858,9 @@ class _Patcher:
                                 if isinstance(a, m.F)
                                 else None
                             )
-                            and n in aliases
-                            and n not in kwds
-                            and (aka := opts.get_field(n))
-                            and kwds.setdefault(n, aka.alias_annotation)
-                            and (
-                                aka.alias_select
-                                and annotate.setdefault(n, m.F(n) if a is n else a),
-                            )
+                            and (aka := aliases.get(n))
+                            and kwds.setdefault(n, (an := aka.get_annotation())) is an
+                            and (aka.select and setitem(annotate, n, aka.f) or True)
                         )
                     ]
                     if annotate:
@@ -909,31 +937,31 @@ class _Patcher:
             _annotate._loads_alias_fields_ = True
             cls._annotate = _annotate
 
-    @classmethod
-    def patch(cls, *args) -> None:
-        for obj in args:
-            if issubclass(obj, m.Model):
-                cls.model(obj)
-            elif issubclass(obj, m.Manager):
-                cls.manager(obj)
-            elif issubclass(obj, m.QuerySet):
-                cls.queryset(obj)
-            else:  # pragma: no cover
-                raise TypeError(
-                    f"expected a subclass of {m.Model | m.Manager | m.QuerySet}"
-                    f"but got {obj.__name__}."
-                )
+    @staticmethod
+    def schema_editor(cls: type[BaseDatabaseSchemaEditor]):
+        if not getattr(cls._field_should_be_altered, "_loads_alias_fields_", None):
+            orig__field_should_be_altered = cls._field_should_be_altered
+
+            @wraps(orig__field_should_be_altered)
+            def _field_should_be_altered(self: BaseDatabaseSchemaEditor, old_field, new_field):
+                if not all(isinstance(f, AliasField) for f in (old_field, new_field)):
+                    return orig__field_should_be_altered(self, old_field, new_field)
+
+            _field_should_be_altered._loads_alias_fields_ = True
+            cls._field_should_be_altered = _field_should_be_altered
 
     @classmethod
-    def install(cls):  # pragma: no cover
-        cls.patch(m.Model, m.Manager, m.QuerySet)
+    def install(cls):
+        cls.model(m.Model), cls.queryset(m.QuerySet), cls.manager(m.Manager)
+        cls.schema_editor(BaseDatabaseSchemaEditor)
+
         try:
             from polymorphic.managers import PolymorphicManager  # type: ignore
             from polymorphic.query import PolymorphicQuerySet  # type: ignore
         except ImportError:
             pass
         else:
-            _Patcher.patch(PolymorphicManager, PolymorphicQuerySet)
+            cls.queryset(PolymorphicQuerySet), cls.manager(PolymorphicManager)
 
 
 _Patcher.install()

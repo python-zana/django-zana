@@ -151,6 +151,7 @@ class Migration(migrations.Migration):
                     "published_on",
                     models.DateTimeField(default=example.aliases.models.rand_date, null=True),
                 ),
+                ("data", models.JSONField(default=example.aliases.models.Book.default_data)),
                 (
                     "authors",
                     models.ManyToManyField(related_name="books", to="aliases.author"),

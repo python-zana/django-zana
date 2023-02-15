@@ -43,11 +43,11 @@ class test_AliasField:
             class Meta:
                 app_label = "aliases"
 
-            zoo = AliasField(m.F("field"), path="field", setter=True)
+            zoo = AliasField(m.F("field"), source="field", setter=True)
 
             foo = AliasField(m.F("field"), setter=True)
-            bar = AliasField(m.F("field"), path="field", cache=True, setter=True)
-            baz = AliasField(m.F("field"), path="field", select=True, setter=True)
+            bar = AliasField(m.F("field"), source="field", cache=True, setter=True)
+            baz = AliasField(m.F("field"), source="field", select=True, setter=True)
 
         aka = Test._alias_fields_
 
