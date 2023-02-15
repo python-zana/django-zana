@@ -179,7 +179,7 @@ class Writer(Author):
 
 
 class Book(BaseModel, PolymorphicModel):
-    __repr_attr__ = ("id", "title", "price", "num_sold", "rating")
+    __repr_attr__ = ("id", "title", "price", "num_sold", "rating", "tag")
 
     title: str = m.CharField(max_length=200)
     price: Decimal = m.DecimalField(max_digits=12, decimal_places=2, default=rand_price)
@@ -187,18 +187,37 @@ class Book(BaseModel, PolymorphicModel):
     authors: "m.manager.RelatedManager[Author]" = m.ManyToManyField(Author, related_name="books")
     publisher: Publisher = m.ForeignKey("Publisher", m.RESTRICT, related_name="books")
     num_sold: int = m.IntegerField(default=rand_num_sold)
-    published_on = m.DateTimeField(null=True, default=rand_date)
+    published_on: datetime = m.DateTimeField(null=True, default=rand_date)
 
     def default_data():
-        return {"tags": ["default"], "pages": randint(100, 1000) // 50 * 50}
+        return {
+            "tags": [f"tag {i}" for i in range(randint(2, 6), 0, -1)],
+            "content": {
+                "pages": randint(100, 1000) // 50 * 50,
+                "chapters": [
+                    {
+                        "title": "Chapter 1",
+                        "topics": {"title": "Topic A", "page": 1},
+                    },
+                ],
+            },
+        }
 
     data = m.JSONField(default=default_data)
 
-    year = AliasField[m.IntegerField](m.F("published_on__year"))
+    year = AliasField[m.IntegerField](m.F("published_on__year")).at(Self).published_on.year
+    date = AliasField("published_on__date", defer=True).at(Self).published_on.date()
 
-    published_by = AliasField(setter=True).at(Self).publisher.name
-    tags = AliasField(setter=True).at(Self).data["tags"]
-    tag = AliasField(setter=True).at(Self).data["tags"][0]
+    published_by = AliasField(setter=True, deleter=True).at(Self).publisher.name
+    tags = AliasField("data__tags", setter=True).at(Self).data["tags"][:2]
+    tag = AliasField[m.TextField](setter=True, deleter=True, cast=True).at(Self).data["tags"][0]
+    num_pages = (
+        AliasField[m.IntegerField](setter=True, deleter=True, cast=True)
+        .at(Self)
+        .data["content"]["pages"]
+    )
+    chapters = AliasField(setter=True).at(Self).data["content"]["chapters"]
+    topics = AliasField(setter=True).at(Self).data["content"]["chapters"][0]["topics"]
 
     commission: Decimal = AliasField[m.DecimalField](
         m.F("price") * m.F("publisher__commission"), max_digits=20, decimal_places=2, cache=False

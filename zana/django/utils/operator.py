@@ -3,6 +3,7 @@ import typing as t
 from collections import abc
 from functools import reduce
 from logging import getLogger
+from operator import attrgetter
 from types import GenericAlias
 
 from typing_extensions import Self
@@ -69,20 +70,20 @@ logger = getLogger(__name__)
 
 
 class AccessType(StrEnum):
-    ATTR = "attr", "Attribute"
-    CALL = "call", "Call"
-    FUNC = "func", "Function"
-    METH = "meth", "Method"
-    ITEM = "item", "Item"
-    SLICE = "slice", "Slice"
+    ATTR = "ATTR", "Attribute"
+    CALL = "CALL", "Call"
+    FUNC = "FUNC", "Function"
+    METH = "METH", "Method"
+    ITEM = "ITEM", "Item"
+    SLICE = "SLICE", "Slice"
 
 
-class AccessOperator(t.Generic[_RT, _T_Op]):
-    __slots__ = ("__args__", "__kwargs__")
+class BaseAccessor(t.Generic[_RT, _T_Op]):
+    __slots__ = ("__args__", "__kwargs__", "__dict__", "__weakref__")
     __args__: tuple
     __type__: t.ClassVar[AccessType] = ...
 
-    _min_args_: t.Final = 1
+    _min_args_: t.Final = 0
     _max_args_: t.Final = math.inf
     _default_args_: t.Final = ()
     _default_kwargs_: t.Final = FrozenDict()
@@ -90,6 +91,20 @@ class AccessOperator(t.Generic[_RT, _T_Op]):
     __type_map: t.Final = {}
 
     __class_getitem__ = classmethod(GenericAlias)
+
+    @staticmethod
+    def _register_type(cls=None, type: str = None):
+        def decorator(klass):
+            if (
+                type
+                and BaseAccessor.__type_map.setdefault(type or klass.__type__, klass) is not klass
+            ):
+                raise TypeError(f"Accessible {type = } already registered")
+            return klass
+
+        if cls is None:
+            return decorator
+        return decorator(cls)
 
     def __init_subclass__(
         cls,
@@ -109,19 +124,16 @@ class AccessOperator(t.Generic[_RT, _T_Op]):
                 f"`type` class kwarg used together with `__type__` attribute in {cls.__name__}."
             )
 
-        if type and cls.__type_map.setdefault(type, cls) is not cls:
-            raise TypeError(f"Accessible {type = } already registered")
+        cls._register_type(cls, type)
         cls.__type__ = type
 
         if merge:
 
-            def merge(self: Self, other: Self):
+            def merge(self: Self, o: Self):
                 cls = self.__class__
-                if cls == other.__class__:
-                    return (
-                        cls(self.__args__ + other.__args__, self.__kwargs__ | other.__kwargs__),
-                    )
-                return self, other
+                if cls == o.__class__:
+                    return (cls(*self.__args__, *o.__args__, **self.__kwargs__ | o.__kwargs__),)
+                return self, o
 
             cls.merge = merge
 
@@ -163,7 +175,7 @@ class AccessOperator(t.Generic[_RT, _T_Op]):
         return f"{self.__class__.__name__}({', '.join(map(repr, self.__args__))})"
 
     def __reduce__(self):
-        return AccessOperator.construct, tuple(self)
+        return BaseAccessor.construct, tuple(self)
 
     def __eq__(self, o: Self) -> bool:
         return o.__class__ == self.__class__ and tuple(o) == tuple(self)
@@ -197,8 +209,15 @@ class AccessOperator(t.Generic[_RT, _T_Op]):
     def merge(self, other):
         return self, other
 
+    def deconstruct(self):
+        return (
+            f"{self.__class__.__module__}.{self.__class__.__name__}",
+            list(self.__args__),
+            dict(self.__kwargs__),
+        )
 
-class Attr(AccessOperator[_RT, _T_Attr], type=AccessType.ATTR, min_args=1, merge=True):
+
+class Attr(BaseAccessor[_RT, _T_Attr], type=AccessType.ATTR, min_args=1, merge=True):
     __slots__ = ()
 
     @classmethod
@@ -226,47 +245,54 @@ class Attr(AccessOperator[_RT, _T_Attr], type=AccessType.ATTR, min_args=1, merge
         delattr(obj, args[-1])
 
 
-class Item(AccessOperator[_RT, _T_Key], type=AccessType.ITEM, min_args=1, merge=True):
-    __slots__ = ()
+class Item(BaseAccessor[_RT, _T_Key], type=AccessType.ITEM, min_args=1, merge=True):
+    __slots__ = ("__keys__",)
+
+    @property
+    def keys(self):
+        try:
+            return self.__keys__
+        except AttributeError:
+            self.__keys__ = rv = tuple(self.get_keys())
+            return rv
+
+    def get_keys(self):
+        return self.__args__
 
     def get(self, obj) -> _RT:
-        for arg in self.__args__:
-            obj = obj[arg]
+        for key in self.keys:
+            obj = obj[key]
         return obj
 
     def set(self, obj, val):
-        args = self.__args__
-        for arg in args[:-1]:
-            obj = obj[arg]
-        obj[args[-1]] = val
+        keys = self.keys
+        for key in keys[:-1]:
+            obj = obj[key]
+        obj[keys[-1]] = val
 
     def delete(self, obj):
-        args = self.__args__
-        for arg in args[:-1]:
-            obj = obj[arg]
-        del obj[args[-1]]
+        keys = self.keys
+        for key in keys[:-1]:
+            obj = obj[key]
+        del obj[keys[-1]]
 
 
-class Slice(Item[_RT, slice], type=AccessType.SLICE, args=(None, None), min_args=1, max_args=3):
+_slice_to_tuple = attrgetter("start", "stop", "step")
+
+
+class Slice(Item[_RT, slice], type=AccessType.SLICE, min_args=1, max_args=3):
     __slots__ = ()
 
-    def get(self, obj):
-        return obj[slice(*self.__args__)]
-
-    def set(self, obj, val):
-        obj[slice(*self.__args__)] = val
-
-    def delete(self, obj):
-        del obj[slice(*self.__args__)]
+    def get_keys(self):
+        return (slice(*a) for a in self.__args__)
 
     @classmethod
     def _parse_params_(cls, args, kwargs):
-        if isinstance(args, slice):
-            args = args.start, args.stop, args.step
+        args = (_slice_to_tuple(a) if isinstance(a, slice) else a for a in args)
         return super()._parse_params_(args, kwargs)
 
 
-class Call(AccessOperator, type=AccessType.CALL):
+class Call(BaseAccessor, type=AccessType.CALL):
     __slots__ = ()
 
     def __call__(self, obj, /, *a, **kw):
@@ -274,7 +300,7 @@ class Call(AccessOperator, type=AccessType.CALL):
         return obj(*a, *args, **kwargs | kw)
 
 
-class Func(AccessOperator, type=AccessType.FUNC, min_args=1):
+class Func(BaseAccessor[_RT, _T_Fn], type=AccessType.FUNC, min_args=1):
     __slots__ = ()
 
     def __call__(self, *a, **kw):
@@ -282,7 +308,7 @@ class Func(AccessOperator, type=AccessType.FUNC, min_args=1):
         return args[0](*a, *args[1:], **kwargs | kw)
 
 
-class Meth(Func, type=AccessType.METH):
+class Meth(Func[_RT, _T_Fn], type=AccessType.METH):
     __slots__ = ()
 
     def __call__(self, obj, /, *a, **kw):
@@ -290,65 +316,70 @@ class Meth(Func, type=AccessType.METH):
         return getattr(obj, args[0])(*a, *args[1:], **kwargs | kw)
 
 
-def _accessor_reducer_(a: tuple[AccessOperator], b: AccessOperator):
+def _accessor_reducer_(a: tuple[BaseAccessor], b: BaseAccessor):
     return a[:-1] + a[-1].merge(b)
 
 
-class Accessor(t.Generic[_T]):
-    __slots__ = "src", "__dict__", "__weakref__"
+class Accessor(BaseAccessor[_RT, _T_Fn], type="Accessor", merge=True):
+    __slots__ = ()
 
     ATTR: t.Final = AccessType.ATTR
     CALL: t.Final = AccessType.CALL
     ITEM: t.Final = AccessType.ITEM
     SLICE: t.Final = AccessType.SLICE
 
-    src: tuple[AccessOperator, ...]
+    __args__: tuple[BaseAccessor, ...]
 
-    def __new__(cls, *src: AccessOperator) -> None:
-        self = object.__new__(cls)
-        it = (AccessOperator.construct(*x) for x in src)
-        self.src = reduce(_accessor_reducer_, it, (next(it),))
-        return self
+    # def __new__(cls, *src: AccessOperator) -> None:
+    #     self = object.__new__(cls)
+    #     it = (AccessOperator.construct(*x) for x in src)
+    #     self.__args__ = reduce(_accessor_reducer_, it, (next(it),))
+    #     return self
+
+    @classmethod
+    def _parse_params_(cls, args, kwargs):
+        if args:
+            it = (x if isinstance(x, BaseAccessor) else BaseAccessor.construct(*x) for x in args)
+            args = reduce(_accessor_reducer_, it, (next(it),))
+        return super()._parse_params_(args, kwargs)
 
     @cached_attr
-    def getter(self) -> abc.Callable[[t.Any], _T]:
-        return pipeline(self.src)
+    def get(self) -> abc.Callable[[t.Any], _T]:
+        return pipeline(self.__args__)
 
     @cached_attr
-    def setter(self):
-        return pipeline(self.src[:-1] + (self.src[-1].set,))
+    def set(self):
+        return pipeline(self.__args__[:-1] + (self.__args__[-1].set,), tap=-1)
 
     @cached_attr
-    def deleter(self):
-        return pipeline(self.src[:-1] + (self.src[-1].delete,))
-
-    def get(self, obj):
-        return self.getter(obj)
-
-    def set(self, obj, val):
-        return self.setter(obj, val)
-
-    def delete(self, obj):
-        return self.deleter(obj)
+    def delete(self):
+        return pipeline(self.__args__[:-1] + (self.__args__[-1].delete,), tap=-1)
 
     def __call__(self, *args, **kwds):
-        return self.getter(*args, **kwds)
+        return self.get(*args, **kwds)
 
-    def __reduce__(self):
-        return self.__class__, self.src
+    def __bool__(self):
+        return not not self.__args__
 
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}{self.src}"
+    def __or__(self, o: abc.Callable):
+        if isinstance(o, Accessor):
+            return self.merge(o)
+        elif callable(o):
+            return self.__class__(*self.__args__, o)
+        else:
+            return self.__class__(*self.__args__, *o)
 
-    def __eq__(self, o: Self) -> bool:
-        return o.__class__ == self.__class__ and o.src == self.src
-
-    def __ne__(self, o: Self) -> bool:
-        return o.__class__ != self.__class__ or o.src != self.src
+    def __ror__(self, o: abc.Callable):
+        if isinstance(o, Accessor):
+            return o.merge(self)
+        elif callable(o):
+            return self.__class__(o, *self.__args__)
+        else:
+            return self.__class__(*o, *self.__args__)
 
     def deconstruct(self):
         return (
             f"{self.__class__.__module__}.{self.__class__.__name__}",
-            list(map(tuple, self.src)),
+            list(map(tuple, self.__args__)),
             {},
         )

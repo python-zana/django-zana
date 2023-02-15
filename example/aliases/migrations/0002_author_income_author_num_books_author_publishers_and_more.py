@@ -6,7 +6,6 @@ import django.db.models.aggregates
 import django.db.models.expressions
 import example.aliases.models
 import zana.django.models
-import zana.django.operator
 from django.db import migrations, models
 
 
@@ -123,7 +122,7 @@ class Migration(migrations.Migration):
             field=zana.django.models.AliasField(
                 expression=models.F("publisher__name"),
                 setter=True,
-                source=zana.django.operator.Accessor(("attr", ("publisher", "name"))),
+                source=[("ATTR", ("publisher", "name"))],
             ),
         ),
         migrations.AddField(

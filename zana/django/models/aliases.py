@@ -18,12 +18,12 @@ from django.conf import settings
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
-from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
 from django.db.models.query_utils import FilteredRelation
 from django.dispatch import receiver
-from zana.django import operator as op
+from zana.django.models.fields import PseudoField
+from zana.django.utils import operator as op
 
 _T = t.TypeVar("_T")
 _KT = t.TypeVar("_KT")
@@ -241,48 +241,46 @@ class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
 
 
 class ExpressionBuilder(t.Generic[_T]):
-    __slots__ = (
-        "__alias__",
-        "__args__",
-        "__origin__",
-    )
+    __slots__ = ("__alias__", "__src__", "__expr__")
+
     __alias__: t.Final["AliasField[_T]"]
-    __args__: t.Final[tuple[(op.AccessOperator, str | None)]]
+    __expr__: t.Final[tuple[_T_Expr, ...]]
+    __src__: t.Final[op.Accessor]
 
     if t.TYPE_CHECKING:
-        __alias__ = __args__ = ...
+        __alias__ = __src__ = __expr__ = None
 
-    def __new__(cls, alias: "AliasField[_T]", *args) -> Self:
+    def __new__(
+        cls, alias: "AliasField[_T]", src: op.Accessor = None, expr: tuple[_T_Expr] = ()
+    ) -> Self:
         self = object.__new__(cls)
-        self.__alias__, self.__args__ = alias, args
+        self.__alias__, self.__src__, self.__expr__ = alias, src or op.Accessor(), tuple(expr or ())
         return self
 
     def __build__(self) -> "AliasField":
-        if args := self.__args__:
-            alias = self.__alias__
-            expression, src = alias.expression, (a for a, _ in args)
-            if not alias.has_expression():
-                names = [e for _, e in args]
-                if None not in names:
-                    expression = m.F("__".join(names))
-
-            return alias.alias_evolve(expression=expression, source=op.Accessor(*src))
+        if src := self.__src__:
+            alias, expression = self.__alias__, self.__alias__.expression
+            if (e_list := not alias.has_expression() and self.__expr__) and None not in e_list:
+                expression = m.F("__".join(e_list))
+            return alias.alias_evolve(expression=expression, source=src)
         raise TypeError(f"cannot build empty expression")
 
-    def __extend__(self, *args):
-        return self.__class__(self.__alias__, *self.__args__, *args)
+    def __extend__(self, src=None, expr=None):
+        return self.__class__(self.__alias__, self.__src__ | (src or ()), self.__expr__ + (expr,))
 
     def __getattr__(self, name: str):
-        return self.__extend__((op.Attr(name), str(name)))
+        if not isinstance(name, str) or name[:2] == "__" == name[-2:]:
+            raise AttributeError(name)
+        return self.__extend__(op.Attr(name), str(name))
 
     def __getitem__(self, key):
         if isinstance(key, slice):
-            return self.__extend__((op.Slice(key), None))
+            return self.__extend__(op.Slice(key))
         else:
-            return self.__extend__((op.Item(key), str(key)))
+            return self.__extend__(op.Item(key), str(key) if isinstance(key, (str, int)) else None)
 
     def __call__(self, *args, **kwargs):
-        return self.__extend__((op.Call(args, kwargs), None))
+        return self.__extend__(op.Call(*args, **kwargs))
 
     def contribute_to_class(self, cls: t.Type[_T_Model], name: str, *a, **kw):
         return self.__build__().contribute_to_class(cls, name, *a, **kw)
@@ -320,7 +318,7 @@ class ConcreteTypeRegistry(type):
         if not hasattr(self, "_basename_"):
             self._basename_ = owner.__name__.replace("Field", "")
 
-    def __dir__(self):
+    def __dir__(self):  # pragma: no cover
         return self._name_type_map_.keys()
 
     def __getattr__(self, name: str) -> t.Any:
@@ -346,17 +344,14 @@ class ConcreteTypeRegistry(type):
         with self._lock_:
             assert cls not in c2t, f"type for concrete base {cls.__name__} already exists"
             name = self._new_name_(name or cls.__name__)
+            module, qualname = self.__module__, f"{self.__qualname__}.{name}"
             n2t[name] = c2t[cls] = new_class(
                 name,
                 (base, cls),
                 None,
                 methodcaller(
                     "update",
-                    {
-                        "__module__": self.__module__,
-                        "__qualname__": f"{self.__qualname__}.{name}",
-                        "_internal_alias_type_": cls,
-                    },
+                    {"__module__": module, "__qualname__": qualname, "_internal_alias_type_": cls},
                 ),
             )
         return n2t[name]
@@ -373,7 +368,7 @@ class ConcreteTypeRegistry(type):
                 raise RuntimeError(f"unable to find a unique qualname for {name[:-3]!r}")
 
 
-class AliasField(m.Field, t.Generic[_T_Field, _T]):
+class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     _POS_ARGS_ = [
         "expression",
         "getter",
@@ -506,6 +501,8 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
             return src
         elif isinstance(src, str):
             return op.Accessor(op.Attr(src))
+        elif isinstance(src, abc.Iterable):
+            return op.Accessor(*src)
         elif src is not None:
             raise TypeError(f"`{self!s}.source` expected `str` or `Accessor` but got {type(src)}")
         if isinstance(expr := self.expression, str):
@@ -519,12 +516,6 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
                     if k in kwds and kwds[k] == v:
                         kwds.pop(k)
             return cls(*args, **kwds)
-
-    def db_type(self, connection):
-        return None
-
-    def get_attname_column(self):
-        return self.get_attname(), None
 
     def contribute_to_class(self, cls: type[_T_Model], name: str, private_only: bool = None):
         if private_only is None:
@@ -547,9 +538,13 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         if self._internal_alias_type_:
             kwargs["internal"] = self.get_internal_field(deconstruct=True)
 
-        if path.startswith(f"{__name__}.AliasField.types."):
-            path = f"{__package__}.AliasField"
-        path = path.replace(f"{__name__}.AliasField", f"{__package__}.AliasField", 1)
+        if "source" in kwargs:
+            kwargs["source"] = self.source.deconstruct()[1]
+
+        prefix = __name__[: __name__.index(".models.") + 8]
+        path = path.replace(f"{__name__}.", prefix, 1)
+        if path.startswith(f"{prefix}AliasField.types."):
+            path = f"{prefix}AliasField"
         return name, path, args, kwargs
 
     def check(self, **kwargs):
@@ -686,7 +681,7 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
         fget = self.fget
         if fget in (True, None):
             if (source := self.source) is not None:
-                fget = source.getter
+                fget = source.get
             else:
                 select, defer, name = self.select, self.defer, self.name
 
@@ -718,13 +713,13 @@ class AliasField(m.Field, t.Generic[_T_Field, _T]):
     def get_setter(self):
         source, func = self.source, self.fset
         if func is True and source:
-            func = source.setter
+            func = source.set
         return func or None
 
     def get_deleter(self):
         source, func = self.source, self.fdel
         if func is True and source:
-            func = source.deleter
+            func = source.delete
         return func or None
 
 
@@ -740,7 +735,7 @@ class _Patcher:
     @staticmethod
     def model(cls: type[_T_Model]):
         mro = (b.refresh_from_db for b in cls.__mro__ if "refresh_from_db" in b.__dict__)
-        if not all(getattr(b, "_loads_alias_fields_", None) for b in mro):
+        if not all(getattr(b, "_zana_checks_alias_fields_", None) for b in mro):
             orig_refresh_from_db = cls.refresh_from_db
 
             @wraps(orig_refresh_from_db)
@@ -763,12 +758,12 @@ class _Patcher:
 
                 orig_refresh_from_db(self, using, fields)
 
-            refresh_from_db._loads_alias_fields_ = True
+            refresh_from_db._zana_checks_alias_fields_ = True
             cls.refresh_from_db = refresh_from_db
 
     @staticmethod
     def manager(cls: type["ImplementsAliasesManager[_T_Model]"]):
-        if not getattr(cls.get_queryset, "_loads_alias_fields_", False):
+        if not getattr(cls.get_queryset, "_zana_checks_alias_fields_", False):
             base_get_queryset = cls.get_queryset
 
             @wraps(base_get_queryset)
@@ -783,7 +778,7 @@ class _Patcher:
 
                 return qs
 
-            get_queryset._loads_alias_fields_ = True
+            get_queryset._zana_checks_alias_fields_ = True
             cls.get_queryset = get_queryset
 
             if not getattr(cls, "_initial_alias_fields_", None):
@@ -808,7 +803,7 @@ class _Patcher:
 
     @staticmethod
     def queryset(cls: type[m.QuerySet[_T_Model]]):
-        if not getattr(cls.annotate, "_loads_alias_fields_", None):
+        if not getattr(cls.annotate, "_zana_checks_alias_fields_", None):
             orig_annotate = cls.annotate
 
             @wraps(orig_annotate)
@@ -832,10 +827,10 @@ class _Patcher:
                     ]
                 return orig_annotate(self, *args, **kwds)
 
-            annotate._loads_alias_fields_ = True
+            annotate._zana_checks_alias_fields_ = True
             cls.annotate = annotate
 
-        if not getattr(cls.alias, "_loads_alias_fields_", None):
+        if not getattr(cls.alias, "_zana_checks_alias_fields_", None):
             orig_alias = cls.alias
 
             @wraps(orig_alias)
@@ -865,10 +860,10 @@ class _Patcher:
 
                 return orig_alias(self, *args, **kwds)
 
-            alias._loads_alias_fields_ = True
+            alias._zana_checks_alias_fields_ = True
             cls.alias = alias
 
-        if not getattr(cls._annotate, "_loads_alias_fields_", None):
+        if not getattr(cls._annotate, "_zana_checks_alias_fields_", None):
             orig__annotate = cls._annotate
 
             @wraps(orig__annotate)
@@ -931,26 +926,12 @@ class _Patcher:
 
                 return clone
 
-            _annotate._loads_alias_fields_ = True
+            _annotate._zana_checks_alias_fields_ = True
             cls._annotate = _annotate
-
-    @staticmethod
-    def schema_editor(cls: type[BaseDatabaseSchemaEditor]):
-        if not getattr(cls._field_should_be_altered, "_loads_alias_fields_", None):
-            orig__field_should_be_altered = cls._field_should_be_altered
-
-            @wraps(orig__field_should_be_altered)
-            def _field_should_be_altered(self: BaseDatabaseSchemaEditor, old_field, new_field):
-                if not all(isinstance(f, AliasField) for f in (old_field, new_field)):
-                    return orig__field_should_be_altered(self, old_field, new_field)
-
-            _field_should_be_altered._loads_alias_fields_ = True
-            cls._field_should_be_altered = _field_should_be_altered
 
     @classmethod
     def install(cls):
         cls.model(m.Model), cls.queryset(m.QuerySet), cls.manager(m.Manager)
-        cls.schema_editor(BaseDatabaseSchemaEditor)
 
         try:
             from polymorphic.managers import PolymorphicManager  # type: ignore

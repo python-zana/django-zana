@@ -33,7 +33,7 @@ _T_Func = FunctionType | staticmethod | classmethod | MethodType | type
 
 
 @checks.register(checks.Tags.models, checks.Tags.compatibility)
-def deprecation_warning_check(app_configs, **kwargs):
+def deprecation_warning_check(app_configs, **kwargs):  # pragma: no cover
     errors = [
         checks.Warning(
             f"`{__package__}.alias()` fields have been deprecated",
@@ -53,7 +53,7 @@ def get_query_aliases(
 ) -> abc.Mapping[str, "alias"] | _T_Default:
     if issubclass(model, ImplementsAliases):
         return model.__query_aliases__
-    elif not issubclass(model, m.Model):
+    elif not issubclass(model, m.Model):  # pragma: no cover
         raise TypeError(f"expected `Model` subclass. not `{model.__class__.__name__}`")
     return default
 
@@ -106,7 +106,7 @@ class GenericAlias:
         return self().contribute_to_class(cls, name)
 
 
-class BaseAliasDescriptor:
+class BaseAliasDescriptor:  # pragma: no cover
     __slots__ = ()
 
     field: "alias"
@@ -183,7 +183,7 @@ class alias(t.Generic[_T]):
         self.boolean, self.verbose_name, self.order_field = verbose_name, order_field, boolean
         if default is NotSet:
             self.get_default = None
-        elif isinstance(default, _T_Func):
+        elif isinstance(default, _T_Func):  # pragma: no cover
             self.get_default = default
         else:
             self.get_default = lambda: default
@@ -191,10 +191,10 @@ class alias(t.Generic[_T]):
     def getter(self, fget: t.Callable[[t.Any], _T]):
         return self.evolve(getter=fget)
 
-    def setter(self, fset: t.Callable[[t.Any], _T]):
+    def setter(self, fset: t.Callable[[t.Any], _T]):  # pragma: no cover
         return self.evolve(setter=fset)
 
-    def deleter(self, fdel: t.Callable):
+    def deleter(self, fdel: t.Callable):  # pragma: no cover
         return self.evolve(deleter=fdel)
 
     def __getitem__(self, src: _T_Src) -> _T_Src:
@@ -203,7 +203,7 @@ class alias(t.Generic[_T]):
     def __call__(self, expression: _T_Expr):
         return self.evolve(expression=expression)
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # pragma: no cover
         return f"{self.__class__.__name__}({self.name!r}, {[*filter(None, (self.attr, self.expression))]})"
 
     def _evolve_kwargs(self, kwargs: dict) -> dict:
@@ -281,7 +281,7 @@ class alias(t.Generic[_T]):
         if cache is None:
             cache = annotate or not attr
 
-        if fset is True and (not attr or annotate or cache):
+        if fset is True and (not attr or annotate or cache):  # pragma: no cover
             if not attr:
                 msg = (
                     f"Cannot resolve attribute for implicit `setter`. "
@@ -318,7 +318,7 @@ class alias(t.Generic[_T]):
 
                 def fget(self: _T_Model):
                     nonlocal name
-                    if self._state.adding:
+                    if self._state.adding:  # pragma: no cover
                         raise AttributeError(name)
                     qs = self._meta.base_manager.filter(pk=self.pk).alias(name).annotate(name)
                     return qs.values_list(name, flat=True).first()
@@ -331,7 +331,7 @@ class alias(t.Generic[_T]):
                 nonlocal default, fget_
                 try:
                     val = fget_(self)
-                except AttributeError:
+                except AttributeError:  # pragma: no cover
                     val = None
                 return default() if val is None else val
 
