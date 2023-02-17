@@ -1,11 +1,12 @@
-import typing as t
-from collections import abc
+import typing as t  # type: ignore
+from collections import abc  # type: ignore
 
-from typing_extensions import Self
+from typing_extensions import Self  # type: ignore
 
-from django.db import models as m
+from django.db import models as m  # type: ignore
 
-from . import aliases, fields
+from . import fields
+from .fields import aliases
 
 _T_Alias = aliases._T
 _T_AliasExpr = aliases._T_Expr

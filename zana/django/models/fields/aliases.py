@@ -1,4 +1,5 @@
 import copy
+import json
 import typing as t
 from abc import ABC
 from collections import abc
@@ -63,6 +64,17 @@ class FallbackDict(dict[_KT, _VT | _FT], t.Generic[_KT, _FT, _VT]):
 
     def __missing__(self, key: _KT):
         return self.fallback
+
+    def __or__(self, x):
+        return self.__class__(self.fallback, {**self, **x})
+
+    def __ror__(self, x):
+        return self.__class__(self.fallback, {**x, **self})
+
+    def copy(self):
+        return self.__class__(self.fallback, self)
+
+    __copy__ = copy
 
 
 class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
@@ -307,6 +319,15 @@ class ConcreteTypeRegistry(type):
     _name_type_map_: t.Final[abc.Mapping[type[_T_Field], "type[_T_Field] | type[AliasField]"]]
     _base_: t.Final[type["AliasField"]]
     _basename_: t.Final[str]
+    _init_defaults_ = {
+        m.CharField: {
+            "max_length": 255,
+        },
+        m.DecimalField: {
+            "max_digits": 36,
+            "decimal_places": 9,
+        },
+    }
 
     def __init__(self, name, bases, nspace, /, **kw) -> None:
         self._internal_type_map_, self._name_type_map_, self._lock_ = {}, {}, RLock()
@@ -345,13 +366,21 @@ class ConcreteTypeRegistry(type):
             assert cls not in c2t, f"type for concrete base {cls.__name__} already exists"
             name = self._new_name_(name or cls.__name__)
             module, qualname = self.__module__, f"{self.__qualname__}.{name}"
+
             n2t[name] = c2t[cls] = new_class(
                 name,
                 (base, cls),
                 None,
                 methodcaller(
                     "update",
-                    {"__module__": module, "__qualname__": qualname, "_internal_alias_type_": cls},
+                    {
+                        "__module__": module,
+                        "__qualname__": qualname,
+                        "_internal_alias_type_": cls,
+                        "_INIT_DEFAULTS_": FallbackDict(
+                            NotSet, self._init_defaults_.get(cls, {}) | base._INIT_DEFAULTS_
+                        ),
+                    },
                 ),
             )
         return n2t[name]
@@ -386,6 +415,8 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         "cache": "cache",
         "defer": "defer",
         "cast": "cast",
+        "is_json": "is_json",
+        "json_encoder": "json_encoder",
     }
     _INIT_DEFAULTS_ = FallbackDict(
         NotSet,
@@ -396,6 +427,8 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         editable=False,
         default=None,
         cast=None,
+        is_json=False,
+        json_encoder=None,
     )
 
     name: str
@@ -412,7 +445,8 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     fget: abc.Callable[[_T_Model], _T] = None
     fset: abc.Callable[[_T_Model, _T], t.NoReturn] = None
     fdel: abc.Callable[[_T_Model], t.NoReturn] = None
-
+    is_json: bool
+    json_encoder: type[json.JSONEncoder]
     _internal_alias_type_: t.Final[type[_T_Field]] = None
 
     @t.final
@@ -452,6 +486,8 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         cache: bool = None,
         defer: bool = None,
         cast: bool = None,
+        is_json: bool = False,
+        json_encoder: type[json.JSONEncoder] = None,
         internal: _T_Field = None,
         **kwds,
     ) -> None:
@@ -541,7 +577,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         if "source" in kwargs:
             kwargs["source"] = self.source.deconstruct()[1]
 
-        prefix = __name__[: __name__.index(".models.") + 8]
+        prefix = __name__[: __name__.index(".models.fields.") + 8]
         path = path.replace(f"{__name__}.", prefix, 1)
         if path.startswith(f"{prefix}AliasField.types."):
             path = f"{prefix}AliasField"
@@ -670,7 +706,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         if not cast and internal:
             expr = m.ExpressionWrapper(expr, internal)
         if self.has_default() and (default := self.get_default()) is not None:
-            expr = Coalesce(expr, m.Value(default, *filter(None, (internal,))))
+            expr = Coalesce(expr, m.Value(default, internal))
 
         if cast and internal:
             expr = m.functions.Cast(expr, internal)
@@ -721,6 +757,27 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         if func is True and source:
             func = source.delete
         return func or None
+
+    def get_prep_value(self, value):
+        value = super().get_prep_value(value)
+        if value is None or not self.is_json:
+            return value
+        return json.dumps(value, cls=self.json_encoder)
+
+    def from_db_value(self, value, expression, connection):
+        if value is None or not self.is_json:
+            return value
+
+        from django.db.models.fields.json import KeyTransform
+
+        # Some backends (SQLite at least) extract non-string values in their
+        # SQL datatypes.
+        if isinstance(expression, KeyTransform) and not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value, cls=self.json_encoder)
+        except json.JSONDecodeError:
+            return value
 
 
 @receiver(m.signals.class_prepared, weak=False)

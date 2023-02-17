@@ -1482,21 +1482,21 @@ files = [
 
 [[package]]
 name = "zana"
-version = "0.1.9"
+version = "0.1.10"
 description = "general utility functions and types"
 category = "main"
 optional = false
 python-versions = ">=3.10,<4.0"
 files = [
-    {file = "zana-0.1.9-py3-none-any.whl", hash = "sha256:a4cfe5211fd4dacb37906299deefb4685b094804e439d39173aed5f2510644e1"},
-    {file = "zana-0.1.9.tar.gz", hash = "sha256:725fae31566e0ef8e743c770e271cb73ff687cd1ec0dccd46f9aa214fc9d5344"},
+    {file = "zana-0.1.10-py3-none-any.whl", hash = "sha256:e221c8d33c6597a20f54594838887811b97db05d041f87a6a8fd0fcbb6c544e4"},
+    {file = "zana-0.1.10.tar.gz", hash = "sha256:ed2a0ba473bd782afc76cebea0a12f1fa528c244832feb5648a2bc62f1169f4a"},
 ]
 
 [package.dependencies]
-attrs = ">=22.2.0,<23.0.0"
+attrs = ">=21.4.0"
 typing-extensions = ">=4.4.0,<5.0.0"
 
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<4.0"
-content-hash = "78d738b4b8b23a49b0f10eab62efbf88b7fd6cf88438a14eae224b84aa10613f"
+content-hash = "a663878ccd6ab8694468a65db691acb2cf1109f0bb15615062e5183f8e075cf1"

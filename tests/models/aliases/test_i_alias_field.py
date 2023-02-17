@@ -91,6 +91,7 @@ class test_AliasField:
         books = Book.create_samples(c_publishers, c_authors)
         tagmax = max(b.data["tags"][0] for b in books)
         with_tagmax = [b for b in books if b.data["tags"][0] == tagmax]
+        i, book = 0, qs.last()
         for i, book in enumerate(qs.filter(tag=tagmax, tags__0=tagmax).all(), 1):
             assert book.tag == book.tags[0] == tagmax == book.data["tags"][0]
             assert book.tags == book.data["tags"][:2]
@@ -105,6 +106,9 @@ class test_AliasField:
         assert book.published_by is mk_published_by is book.publisher.name
         del book.published_by
         assert e_published_by == book.published_by == book.publisher.name
+
+        assert book.date == book.published_on.date()
+        assert book == qs.alias("date").get(pk=book.pk, date=book.date)
 
         num_pages = book.num_pages
         mk_pages = Mock(int)
@@ -123,7 +127,16 @@ class test_AliasField:
             == tag_1
             == qs.filter(pk=book.pk).annotate("tag").values_list("tag", flat=True).get()
         )
-        assert qs.filter(pk=book.pk).exclude(tag=tagmax).get(pk=book.pk, tag=tag_1)
-
+        r_book = (
+            qs.filter(pk=book.pk)
+            .exclude(tag=tagmax)
+            .get(pk=book.pk, num_pages=num_pages, tag=tag_1)
+        )
+        assert r_book == book
         assert book.date == book.published_on.date()
+
+        e_desc = book.data["description"]
+        assert e_desc == book.desc_c == book.desc_r == book.desc_s
+        assert qs.filter(desc_c=e_desc, desc_r=e_desc, desc_s=e_desc).get(pk=book.pk) == book
+
         # assert 0

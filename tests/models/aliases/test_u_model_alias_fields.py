@@ -5,7 +5,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
 from zana.django.models import AliasField
-from zana.django.models.aliases import ModelAliasFields, get_alias_fields
+from zana.django.models.fields.aliases import ModelAliasFields, get_alias_fields
 
 pytestmark = [
     pytest.mark.django_db,

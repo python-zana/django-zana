@@ -1,6 +1,6 @@
 from ._xaliases import alias
-from .aliases import AliasField
 from .fields import PseudoField
+from .fields.aliases import AliasField
 
 __all__ = [
     "alias",

@@ -5,6 +5,7 @@ from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 
 __all__ = [
     "PseudoField",
+    "AliasField",
 ]
 
 
@@ -43,3 +44,6 @@ class _Patcher:
 
 
 _Patcher.install()
+
+
+from .aliases import AliasField

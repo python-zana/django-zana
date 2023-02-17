@@ -6,7 +6,7 @@ from django.core import checks
 from django.db import models as m
 from example.aliases.models import BaseModel
 from zana.django.models import AliasField
-from zana.django.models.aliases import ImplementsAliases
+from zana.django.models.fields.aliases import ImplementsAliases
 
 pytestmark = [
     pytest.mark.django_db,
