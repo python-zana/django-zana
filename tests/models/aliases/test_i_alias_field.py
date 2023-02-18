@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from django.db import models as m  # type: ignore
 from example.aliases.models import Author, BaseModel, Book, Publisher, Rating
 
 pytestmark = [
@@ -118,6 +119,7 @@ class test_AliasField:
         assert "pages" not in book.data["content"]
         book.num_pages = num_pages
         assert book.data["content"]["pages"] == num_pages == book.num_pages
+        assert book == qs.get(pk=book.pk, num_pages=num_pages)
 
         tag_1 = book.data["tags"][1]
         del book.tag
@@ -137,6 +139,7 @@ class test_AliasField:
 
         e_desc = book.data["description"]
         assert e_desc == book.desc_c == book.desc_r == book.desc_s
+        print("\n\n", f"+++ " * 20, "\n")
         assert qs.filter(desc_c=e_desc, desc_r=e_desc, desc_s=e_desc).get(pk=book.pk) == book
 
         # assert 0

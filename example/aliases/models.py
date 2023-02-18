@@ -210,20 +210,16 @@ class Book(BaseModel, PolymorphicModel):
     date = AliasField("published_on__date", defer=True).at(Self).published_on.date()
 
     published_by = AliasField(setter=True, deleter=True).at(Self).publisher.name
-    tags = AliasField("data__tags", setter=True, is_json=True).at(Self).data["tags"][:2]
-    tag = (
-        AliasField[m.TextField](setter=True, is_json=True, deleter=True, cast=True)
-        .at(Self)
-        .data["tags"][0]
-    )
+    tags = AliasField("data__tags", setter=True).at(Self).data["tags"][:2]
+    tag = AliasField[m.TextField](setter=True, json=True, deleter=True).at(Self).data["tags"][0]
     num_pages = (
         AliasField[m.IntegerField](setter=True, deleter=True, cast=True)
         .at(Self)
         .data["content"]["pages"]
     )
-    desc_r = AliasField(setter=True).at(Self).data["description"]
-    desc_s = AliasField[m.TextField](setter=True).at(Self).data["description"]
-    desc_c = AliasField[m.TextField](setter=True, cast=True).at(Self).data["description"]
+    desc_r = AliasField[m.CharField](setter=True).at(Self).data["description"]
+    desc_s = AliasField[m.CharField](setter=True).at(Self).data["description"]
+    desc_c = AliasField[m.CharField](setter=True, cast=True).at(Self).data["description"]
     chapters = AliasField(setter=True).at(Self).data["content"]["chapters"]
     topics = AliasField(setter=True).at(Self).data["content"]["chapters"][0]["topics"]
 
