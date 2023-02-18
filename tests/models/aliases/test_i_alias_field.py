@@ -139,7 +139,16 @@ class test_AliasField:
 
         e_desc = book.data["description"]
         assert e_desc == book.desc_c == book.desc_r == book.desc_s
-        print("\n\n", f"+++ " * 20, "\n")
         assert qs.filter(desc_c=e_desc, desc_r=e_desc, desc_s=e_desc).get(pk=book.pk) == book
 
+        short_books = [b for b in books if b.data["content"]["pages"] <= 500]
+        not_short_books = [b for b in books if b.data["content"]["pages"] > 500]
+        i = 0
+        for i, book in enumerate(qs.filter(is_short=True).all(), 1):
+            assert book.is_short is True is (book.data["content"]["pages"] <= 500)
+            assert book in short_books
+
+        assert i == len(short_books)
+        assert not ({*short_books} & {*not_short_books})
+        assert {*not_short_books} == {*qs.filter(is_short=False).all()}
         # assert 0

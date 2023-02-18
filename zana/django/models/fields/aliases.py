@@ -417,25 +417,32 @@ class ConcreteTypeRegistryType(type):
                 def get_prep_value(self, value, *, dump=None, prepared=True):
                     if value is not None:
                         if not (dump and prepared):
-                            value = super(cls, self).get_prep_value(value)
+                            value = super(base, self).get_prep_value(value)
                         if dump:
                             value = self._base_get_prep_value_(value)
                     return value
 
                 def get_db_prep_value(self, value, connection: "BaseDatabaseWrapper", prepared):
-                    value = super(cls, self).get_db_prep_value(value, connection, prepared)
+                    value = super(base, self).get_db_prep_value(value, connection, prepared)
 
                     if connection.vendor in _dump_vendors:
                         value = self.get_prep_value(value, dump=True)
                     return value
+
+                if cls.get_internal_type != m.Field.get_internal_type:
+
+                    def get_internal_type(self):
+                        it = super(base, self).get_internal_type()
+                        return it
 
                 _internal_from_db_value_ = getattr(cls, "from_db_value", None)
                 _json_from_db_value_ = base.from_db_value
 
                 def from_db_value(self, value, expr, connection: "BaseDatabaseWrapper"):
                     if value is not None:
-                        if connection.vendor in _dump_vendors:
-                            value = self._json_from_db_value_(value, expr, connection)
+                        if isinstance(value, (str, bytes, bytearray)):
+                            if connection.vendor in _dump_vendors:
+                                value = self._json_from_db_value_(value, expr, connection)
                         if meth := self._internal_from_db_value_:  # pragma: no cover
                             value = meth(value, expr, connection)
                     return value

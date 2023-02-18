@@ -217,6 +217,9 @@ class Book(BaseModel, PolymorphicModel):
         .at(Self)
         .data["content"]["pages"]
     )
+    is_short = AliasField[m.BooleanField](
+        m.Case(m.When(num_pages__lte=500, then=m.Value(True)), default=m.Value(False)), json=True
+    )
     desc_r = AliasField[m.CharField](setter=True).at(Self).data["description"]
     desc_s = AliasField[m.CharField](setter=True).at(Self).data["description"]
     desc_c = AliasField[m.CharField](setter=True, cast=True).at(Self).data["description"]
