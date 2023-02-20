@@ -120,8 +120,8 @@ class Publisher(BaseModel):
         )
 
     @classmethod
-    def create_samples(cls, count=2):
-        return [cls.objects.create(name=f"Publisher {x}") for x in range(count)]
+    def create_samples(cls, count=2, using=None):
+        return [cls.objects.using(using).create(name=f"Publisher {x}") for x in range(count)]
 
     def __str__(self) -> str:
         return f"{self.name} ({self.pk})"
@@ -166,9 +166,11 @@ class Author(BaseModel, PolymorphicModel):
         )
 
     @classmethod
-    def create_samples(cls, count=4):
+    def create_samples(cls, count=4, using=None):
         stop, age = count + 1, lambda: randint(16, 85)
-        return [cls.objects.create(name=f"Author {x}", age=age()) for x in range(1, stop)]
+        return [
+            cls.objects.using(using).create(name=f"Author {x}", age=age()) for x in range(1, stop)
+        ]
 
     def __str__(self) -> str:
         return f"{self.name} ({self.pk})"
@@ -179,7 +181,7 @@ class Writer(Author):
 
 
 class Book(BaseModel, PolymorphicModel):
-    __repr_attr__ = ("id", "title", "price", "num_sold", "rating", "tag")
+    __repr_attr__ = ("id", "title", "rating", "num_pages", "tag")
 
     title: str = m.CharField(max_length=200)
     price: Decimal = m.DecimalField(max_digits=12, decimal_places=2, default=rand_price)
@@ -193,6 +195,7 @@ class Book(BaseModel, PolymorphicModel):
         return {
             "tags": [f"tag {i}" for i in range(randint(2, 6), 0, -1)],
             "description": f"desc {randint(0,1000)}",
+            "is_best_seller": randint(0, 2) > 1,
             "content": {
                 "pages": randint(100, 1000) // 50 * 50,
                 "chapters": [
@@ -218,11 +221,12 @@ class Book(BaseModel, PolymorphicModel):
         .data["content"]["pages"]
     )
     is_short = AliasField[m.BooleanField](
-        m.Case(m.When(num_pages__lte=500, then=m.Value(True)), default=m.Value(False)), json=True
+        m.Case(m.When(num_pages__lte=m.Value(500), then=m.Value(True)), default=m.Value(False)),
     )
-    desc_r = AliasField[m.CharField](setter=True).at(Self).data["description"]
+    is_best_seller: bool = AliasField[m.BooleanField]().at(Self).data["is_best_seller"]
+    desc_r = AliasField[m.CharField](setter=True, default="").at(Self).data["description"]
     desc_s = AliasField[m.CharField](setter=True).at(Self).data["description"]
-    desc_c = AliasField[m.CharField](setter=True, cast=True).at(Self).data["description"]
+    desc_c = AliasField[m.CharField](setter=True).at(Self).data["description"]
     chapters = AliasField(setter=True).at(Self).data["content"]["chapters"]
     topics = AliasField(setter=True).at(Self).data["content"]["chapters"][0]["topics"]
 
@@ -274,10 +278,11 @@ class Book(BaseModel, PolymorphicModel):
         cls,
         c_publishers: Counter[Publisher, int] | int = 2,
         c_authors: Counter[Author, int] = None,
+        using=None,
     ):
         if isinstance(c_publishers, int):
             c_publishers = Counter(
-                {p: randint(1, 3) for p in Publisher.create_samples(c_publishers)}
+                {p: randint(1, 3) for p in Publisher.create_samples(c_publishers, using=using)}
             )
 
         if c_authors is None:
@@ -285,7 +290,10 @@ class Book(BaseModel, PolymorphicModel):
 
         if isinstance(c_authors, int):
             c_authors = Counter(
-                {a: randint(1, c_publishers.total() // 2) for a in Author.create_samples(c_authors)}
+                {
+                    a: randint(1, c_publishers.total() // 2)
+                    for a in Author.create_samples(c_authors, using=using)
+                }
             )
 
         publishers, max_rating = list(c_publishers.elements()), max(Rating)

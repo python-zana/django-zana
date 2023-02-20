@@ -82,7 +82,8 @@ class test_AliasField:
             assert e_books[0].version is e_books[0].updated_at
         # assert 0
 
-    def test_books(self):
+    @pytest.mark.using_db("sqlite", "postgresql", "mysql")
+    def test_books(self, db_backends):
         book: Book
         publishers = Publisher.create_samples(3)
         authors = Author.create_samples(6)
@@ -93,11 +94,16 @@ class test_AliasField:
         tagmax = max(b.data["tags"][0] for b in books)
         with_tagmax = [b for b in books if b.data["tags"][0] == tagmax]
         i, book = 0, qs.last()
-        for i, book in enumerate(qs.filter(tag=tagmax, tags__0=tagmax).all(), 1):
+
+        for i, book in enumerate(
+            qs.annotate("num_pages", "tag", "tags").filter(tag=tagmax, tags__0=tagmax).all(), 1
+        ):
             assert book.tag == book.tags[0] == tagmax == book.data["tags"][0]
             assert book.tags == book.data["tags"][:2]
             assert book in with_tagmax
             assert book.num_pages == book.data["content"]["pages"]
+
+        print(f"\n{qs.filter(tag=tagmax, tags__0=tagmax).explain() = !r}\n")
 
         assert i == len(with_tagmax)
 
@@ -138,17 +144,30 @@ class test_AliasField:
         assert book.date == book.published_on.date()
 
         e_desc = book.data["description"]
+        print(f"\n{qs.filter(desc_c=e_desc, desc_r=e_desc, desc_s=e_desc).explain() = }\n")
         assert e_desc == book.desc_c == book.desc_r == book.desc_s
         assert qs.filter(desc_c=e_desc, desc_r=e_desc, desc_s=e_desc).get(pk=book.pk) == book
 
         short_books = [b for b in books if b.data["content"]["pages"] <= 500]
         not_short_books = [b for b in books if b.data["content"]["pages"] > 500]
         i = 0
+        print(f"\n{qs.filter(is_short=True).all().explain() = }\n")
         for i, book in enumerate(qs.filter(is_short=True).all(), 1):
             assert book.is_short is True is (book.data["content"]["pages"] <= 500)
             assert book in short_books
-
         assert i == len(short_books)
         assert not ({*short_books} & {*not_short_books})
         assert {*not_short_books} == {*qs.filter(is_short=False).all()}
+
+        best_seller_books = [b for b in books if b.data["is_best_seller"]]
+        not_best_seller_books = [b for b in books if not b.data["is_best_seller"]]
+        i = 0
+        print(f"\n{qs.filter(is_best_seller=True).all().explain() = }\n")
+        for i, book in enumerate(qs.filter(is_best_seller=True).all(), 1):
+            assert book.is_best_seller is True is book.data["is_best_seller"]
+            assert book in best_seller_books
+        assert i == len(best_seller_books)
+        assert not ({*best_seller_books} & {*not_best_seller_books})
+        assert {*not_best_seller_books} == {*qs.filter(is_best_seller=False).all()}
+
         # assert 0

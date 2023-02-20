@@ -10,9 +10,10 @@ from json import JSONDecoder, JSONEncoder
 from logging import getLogger
 from operator import methodcaller, or_, setitem
 from threading import RLock
-from types import FunctionType, GenericAlias, MethodType, new_class
+from types import FunctionType, GenericAlias, MethodType, NoneType, new_class
 from weakref import WeakKeyDictionary
 
+from traitlets import default
 from typing_extensions import Self
 from zana.common import cached_attr, pipeline
 from zana.types import NotSet
@@ -40,7 +41,7 @@ _VT = t.TypeVar("_VT")
 _T_Src = t.TypeVar("_T_Src")
 _T_Default = t.TypeVar("_T_Default")
 _T_Model = t.TypeVar("_T_Model", bound="ImplementsAliases", covariant=True)
-_T_Field = t.TypeVar("_T_Field", bound="m.Field")
+_T_Field = t.TypeVar("_T_Field", bound=m.Field, covariant=True)
 _T_Expr = t.Union[
     Combinable,
     str,
@@ -328,6 +329,7 @@ class ConcreteTypeRegistryType(type):
     _base_: t.Final[type["AliasField"]]
     _basename_: t.Final[str]
     _lock_: RLock
+    _concrete_init_defaults_: abc.Mapping[type[_T_Field], abc.Mapping[str, t.Any]]
 
     def __new__(self, name, bases, nspace: dict, /, **kw) -> None:
         cls = super().__new__(self, name, bases, nspace, **kw)
@@ -392,12 +394,12 @@ class ConcreteTypeRegistryType(type):
         return n2t[name]
 
     def json_compat_type(
-        self, cls: type[_T_Field], base: type[m.JSONField] = m.JSONField
+        self, base: type[_T_Field], json_base: type[m.JSONField] = m.JSONField
     ) -> type[_T_Field] | type[m.JSONField]:
-        base = base or m.JSONField
-        cls = cls or base
-        key = base, cls
-        assert issubclass(base, m.JSONField)
+        json_base = json_base or m.JSONField
+        base = base or json_base
+        key = json_base, base
+        assert issubclass(json_base, m.JSONField)
 
         if klass := self._json_compat_types_.get(key):
             return klass
@@ -406,50 +408,59 @@ class ConcreteTypeRegistryType(type):
             if klass := self._json_compat_types_.get(key):  # pragma: no cover
                 return klass
 
-            if issubclass(cls, base):
-                return self._json_compat_types_.setdefault(key, cls)
+            if issubclass(base, json_base):
+                return self._json_compat_types_.setdefault(key, base)
 
-            _dump_vendors = {"postgresql"}
+            dump_vendors = {"postgresql", "mysql"}
+            non_dump_types = NoneType | _JSONString
 
-            class JSONCompatBase(base, cls):
-                _base_get_prep_value_ = base.get_prep_value
+            class Base(base):
+                pass
+
+            class JSONCompatBase(json_base, Base):
+                _has_base_from_db_value_ = hasattr(base, "from_db_value")
+                __module__ = base.__module__
+                __name__ = base.__name__
+                __qualname__ = base.__qualname__
+
+                def get_internal_type(self):
+                    return super(Base, self).get_internal_type()
 
                 def get_prep_value(self, value, *, dump=None, prepared=True):
-                    if value is not None:
-                        if not (dump and prepared):
-                            value = super(base, self).get_prep_value(value)
-                        if dump:
-                            value = self._base_get_prep_value_(value)
+                    values = [value, None, None]
+                    if not (dump and prepared):
+                        value = super(Base, self).get_prep_value(value)
+                        values[1] = value
+                    if dump and value is not None:
+                        value = super().get_prep_value(value)
+                        if isinstance(value, str):
+                            value = _JSONString(value)
+                        values[2] = value
                     return value
 
-                def get_db_prep_value(self, value, connection: "BaseDatabaseWrapper", prepared):
-                    value = super(base, self).get_db_prep_value(value, connection, prepared)
+                def should_json_dump(self, value, conn: "BaseDatabaseWrapper"):
+                    return not isinstance(value, non_dump_types) and conn.vendor in dump_vendors
 
-                    if connection.vendor in _dump_vendors:
+                def get_db_prep_value(
+                    self, value, connection: "BaseDatabaseWrapper", prepared=False
+                ):
+                    values = [value, None, None]
+                    value = super().get_db_prep_value(value, connection, prepared)
+                    values[1] = value
+                    if self.should_json_dump(value, connection):
                         value = self.get_prep_value(value, dump=True)
+                        values[2] = value
                     return value
-
-                if cls.get_internal_type != m.Field.get_internal_type:
-
-                    def get_internal_type(self):
-                        it = super(base, self).get_internal_type()
-                        return it
-
-                _internal_from_db_value_ = getattr(cls, "from_db_value", None)
-                _json_from_db_value_ = base.from_db_value
 
                 def from_db_value(self, value, expr, connection: "BaseDatabaseWrapper"):
+                    nonlocal base, json_base
                     if value is not None:
                         if isinstance(value, (str, bytes, bytearray)):
-                            if connection.vendor in _dump_vendors:
-                                value = self._json_from_db_value_(value, expr, connection)
-                        if meth := self._internal_from_db_value_:  # pragma: no cover
-                            value = meth(value, expr, connection)
+                            if connection.vendor in dump_vendors:
+                                value = json_base.from_db_value(self, value, expr, connection)
+                        if self._has_base_from_db_value_:
+                            value = base.from_db_value(self, value, expr, connection)
                     return value
-
-                __module__ = cls.__module__
-                __name__ = cls.__name__
-                __qualname__ = cls.__qualname__
 
             klass = self._json_compat_types_.setdefault(key, JSONCompatBase)
             return klass
@@ -480,6 +491,16 @@ class ConcreteTypeRegistryType(type):
 
     def _new_class_dict_(self: type[Self], cls: type[_T_Field], nspace: dict):
         return nspace | {"_INIT_DEFAULTS_": self._new_init_defaults_(cls)}
+
+
+class _JSONString(str):
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"{self.__class__.__name__.strip('_')}({self!s})"
+
+    def __reduce__(self):  # pragma: no cover
+        return self.__class__, (str(self),)
 
 
 class ConcreteTypeRegistry(metaclass=ConcreteTypeRegistryType):
@@ -528,18 +549,19 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     ]
 
     _KWARGS_TO_ATTRS_ = {
-        "expression": "expression",
-        "getter": "fget",
-        "setter": "fset",
-        "deleter": "fdel",
-        "select": "select",
-        "source": "_source",
-        "cache": "cache",
-        "defer": "defer",
-        "cast": "_cast",
-        "json": "json",
-        "json_encoder": "json_encoder",
-        "json_decoder": "json_decoder",
+        "expression": op.Attr("expression"),
+        "getter": op.Attr("fget"),
+        "setter": op.Attr("fset"),
+        "deleter": op.Attr("fdel"),
+        "select": op.Attr("select"),
+        "source": op.Attr("_source"),
+        "coalesce": op.Attr("_coalesce"),
+        "cache": op.Attr("cache"),
+        "defer": op.Attr("defer"),
+        "cast": op.Attr("cast"),
+        "wrap": op.Attr("_wrap"),
+        "json": op.Attr("json"),
+        "json_options": op.Attr("_json_options"),
     }
     _INIT_DEFAULTS_ = FallbackDict(
         NotSet,
@@ -549,24 +571,25 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         deleter=None,
         editable=False,
         default=None,
+        defer=False,
         cast=None,
         json=None,
         source=None,
-        json_encoder=None,
-        json_decoder=None,
+        select=False,
+        wrap=None,
+        coalesce=False,
+        json_options=None,
     )
+    _NULLABLE_INIT_DEFAULTS_ = {"select", "coalesce", "defer"}
 
     name: str
     expression: _T_Expr = None
     _init_args_: t.Final[set]
-    json_encoder: type[JSONEncoder]
-    json_decoder: type[JSONDecoder]
     json: bool
 
     verbose_name: str
     _source: str | op.Accessor
-    _cast: bool
-
+    _coalesce: _T_Expr | bool | None
     _cached_descriptor_class_ = CachedAliasDescriptor
     _dynamic_descriptor_class_ = DynamicAliasDescriptor
 
@@ -574,7 +597,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     fget: abc.Callable[[_T_Model], _T] = None
     fset: abc.Callable[[_T_Model, _T], t.NoReturn] = None
     fdel: abc.Callable[[_T_Model], t.NoReturn] = None
-    _query_annotation: _T_Expr = None
     _internal_field_type_: t.Final[type[_T_Field]] = None
     _internal_json_field_type_: t.Final[type[_T_Field | m.JSONField]] = None
     _weak_cache_map_: t.Final[dict[Self, dict[str, t.Any]]] = WeakKeyDictionary()
@@ -618,9 +640,10 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         cache: bool = None,
         defer: bool = None,
         cast: bool = None,
+        wrap: bool = None,
+        coalesce: _T_Expr | bool | None,
         json: bool = False,
-        json_encoder: type[JSONEncoder] = None,
-        json_decoder: type[JSONEncoder] = None,
+        json_options: abc.Mapping[str, t.Any] = None,
         internal: _T_Field = None,
         **kwds,
     ) -> None:
@@ -654,23 +677,33 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         return m.F(self.name)
 
     @cached_attr
-    def select(self):
-        return False
+    def coalesce(self):
+        if (val := self._coalesce) is True:
+            default, val = self.get_default(), None
+            if default is not None:
+                val = m.Value(default, self.get_internal_field())
+        return val or None
+
+    @cached_attr
+    def cache(self):
+        return not not self.select or not (self.fset or self.source)
 
     @cached_attr
     def cache(self):
         return not not self.select or not (self.fset or self.source)
 
     @property
-    @_weak_cached
-    def cast(self):
-        if (ok := self._cast) is None:
-            ok = not not self.is_json
-        return ok
+    def json_field_options(self):
+        return {"encoder": None, "decoder": None} | (self._json_options or {})
 
-    @cached_attr
-    def defer(self):
-        return False
+    @property
+    def wrap(self) -> bool:
+        cast, wrap = self.cast, self._wrap
+        if wrap and cast:
+            raise TypeError(f"{self} arguments `wrap=True` and `cast=True` are mutually exclusive.")
+        elif wrap is None:
+            wrap = not (cast or self.is_json)
+        return not not wrap
 
     @property
     @_weak_cached
@@ -681,10 +714,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         for cls in self.get_concrete_field_path()[0][::-1]:
             if isinstance(cls, m.JSONField) or (isinstance(cls, AliasField) and cls.is_json):
                 return True
-
-    # @property
-    # def non_db_attrs(self):
-    #     return self.deconstruct()[-1].keys()
 
     @property
     @_weak_cached
@@ -702,7 +731,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
             return op.Accessor(op.Attr(expr.replace("__", ".")))
 
     @_weak_cached
-    def get_internal_json_field(self):
+    def get_internal_json_field(self) -> m.JSONField:
         if not self.is_json:
             return
         internal, (path, part) = self._internal_field_type_, self.get_concrete_field_path()
@@ -725,18 +754,12 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         elif internal:
             *_, args, kwds = internal.deconstruct(self)
 
-        if self.json_encoder is not None:
-            kwds.update(encoder=self.json_encoder)
-
-        if self.json_decoder is not None:
-            kwds.update(decoder=self.json_decoder)
-
         cls = self.__class__.types.json_compat_type(internal, base)
-
+        kwds |= self.json_field_options
         return cls(*args, **kwds)
 
     @_weak_cached(by_params=True)
-    def get_internal_field(self, *, json: bool = None):
+    def get_internal_field(self, *, json: bool = None) -> m.Field:
         if json is not False and self.is_json:
             return self.get_internal_json_field()
 
@@ -759,8 +782,9 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     def get_deconstructing_internal_field(self):
         if (cls := self._internal_field_type_) is not None:
             *_, args, kwds = cls.deconstruct(self)
+            nulls = self._NULLABLE_INIT_DEFAULTS_
             for k, v in self._INIT_DEFAULTS_.items():
-                if k in kwds and kwds[k] == v:
+                if k in kwds and (kwds[k] == v or (k in nulls and kwds[k] is None)):
                     kwds.pop(k)
             return cls(*args, **kwds)
 
@@ -809,7 +833,10 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         k2a, ia, defaults = self._KWARGS_TO_ATTRS_, self._init_args_, self._INIT_DEFAULTS_
         (name, path), cls = t.cast(tuple[str, str], super().deconstruct()[:2]), self.__class__
 
-        args, kwargs = [], {k: v for k in ia for v in (getattr(self, k2a[k]),) if v != defaults[k]}
+        nulls = self._NULLABLE_INIT_DEFAULTS_
+        args, kwargs = [], {
+            k: v for k in ia if ((v := k2a[k](self)) is None and k in nulls) or v != defaults[k]
+        }
         if self._internal_field_type_:
             kwargs["internal"] = self.get_deconstructing_internal_field()
 
@@ -901,7 +928,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         k2a, ia = self._KWARGS_TO_ATTRS_, self._init_args_
         for kv in ((kv for kv in arg if kv[0] not in kwds), kwds.items()) if kwds else (arg,):
             for k, v in kv:
-                setattr(self, k2a[k], v)
+                k2a[k].set(self, v)
                 ia.add(k)
         return self
 
@@ -942,17 +969,15 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
     @_weak_cached
     def get_annotation(self):
-        if (expr := self._query_annotation) is None:
-            cast, expr, internal = self.cast, self.get_expression(), self.get_internal_field()
-            if expr is not None:
-                if not cast and internal:
-                    expr = m.ExpressionWrapper(expr, internal)
-                if self.has_default() and (default := self.get_default()) is not None:
-                    expr = Coalesce(expr, m.Value(default, internal))
-
-                if cast and internal:
-                    expr = m.functions.Cast(expr, internal)
-                self._query_annotation = expr
+        expr, internal = self.get_expression(), self.get_internal_field()
+        if expr is not None:
+            cast, coalesce, wrap = self.cast, self.coalesce, self.wrap
+            if wrap and internal:
+                expr = m.ExpressionWrapper(expr, internal)
+            if coalesce is not None:
+                expr = Coalesce(expr, coalesce)
+            if cast and internal:
+                expr = m.functions.Cast(expr, internal)
         return expr
 
     def get_getter(self):
