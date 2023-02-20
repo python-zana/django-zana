@@ -30,6 +30,7 @@ class City(StrEnum):
 
 
 class Rating(IntEnum):
+    NONE = 0
     VERY_BAD = 1
     BAD = 2
     AVERAGE = 3
@@ -133,13 +134,11 @@ class Author(BaseModel, PolymorphicModel):
     age: str = m.IntegerField()
     books: "m.manager.RelatedManager[Book]"
 
-    rating: Decimal = AliasField[m.DecimalField](
-        m.Avg("books__rating"),
+    rating: Decimal = AliasField[m.IntegerField](
+        m.functions.Ceil(m.Avg("books__rating")),
+        choices=Rating.choices,
         select=True,
-        cast=True,
-        default=ZERO_DEC,
-        max_digits=20,
-        decimal_places=2,
+        default=Rating.NONE,
     )
 
     num_books: int = AliasField[m.IntegerField](m.Count("books__pk"))

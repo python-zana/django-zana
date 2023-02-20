@@ -28,7 +28,8 @@ DEBUG = False
 ALLOWED_HOSTS = ["*"]
 
 
-LOG_LEVEL = "DEBUG"
+LOG_LEVEL = "INFO"
+ZANA_LOG_LEVEL = "DEBUG"
 
 LOGGING = {
     "version": 1,
@@ -86,12 +87,12 @@ LOGGING = {
         },
         "zana.django": {
             "handlers": ["console", "mail_admins"],
-            "level": LOG_LEVEL,
+            "level": ZANA_LOG_LEVEL,
             "propagate": True,
         },
         "example": {
             "handlers": ["console", "mail_admins"],
-            "level": LOG_LEVEL,
+            "level": ZANA_LOG_LEVEL,
             "propagate": True,
         },
     },

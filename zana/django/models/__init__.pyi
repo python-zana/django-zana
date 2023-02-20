@@ -7,6 +7,20 @@ from django.db import models as m  # type: ignore
 
 from . import fields
 from .fields import aliases
+from .operator import Attr, Call, Chain, Func, Item, Meth, Signature, Slice
+
+__all__ = [
+    "AliasField",
+    "PseudoField",
+    "Signature",
+    "Attr",
+    "Item",
+    "Slice",
+    "Call",
+    "Meth",
+    "Func",
+    "Chain",
+]
 
 _T_Alias = aliases._T
 _T_AliasExpr = aliases._T_Expr
