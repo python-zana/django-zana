@@ -6,14 +6,12 @@ from collections import abc
 from contextlib import suppress
 from functools import reduce, wraps
 from itertools import chain, repeat
-from json import JSONDecoder, JSONEncoder
 from logging import getLogger
 from operator import methodcaller, or_, setitem
 from threading import RLock
 from types import FunctionType, GenericAlias, MethodType, NoneType, new_class
 from weakref import WeakKeyDictionary
 
-from traitlets import default
 from typing_extensions import Self
 from zana.common import cached_attr, pipeline
 from zana.types import NotSet
