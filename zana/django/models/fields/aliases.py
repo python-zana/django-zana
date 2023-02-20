@@ -933,7 +933,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     if t.TYPE_CHECKING:
         alias_evolve: type[Self]
 
-    def at(self, src: _T_Src) -> _T_Src:
+    def to(self, src: _T_Src) -> _T_Src:
         return ExpressionBuilder[_T](self)
 
     def annotation(self, expression: _T_Expr):

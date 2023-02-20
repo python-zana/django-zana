@@ -209,26 +209,26 @@ class Book(BaseModel, PolymorphicModel):
 
     data = m.JSONField(default=default_data)
 
-    year = AliasField[m.IntegerField](m.F("published_on__year")).at(Self).published_on.year
-    date = AliasField("published_on__date", defer=True).at(Self).published_on.date()
+    year = AliasField[m.IntegerField](m.F("published_on__year")).to(Self).published_on.year
+    date = AliasField("published_on__date", defer=True).to(Self).published_on.date()
 
-    published_by = AliasField(setter=True, deleter=True).at(Self).publisher.name
-    tags = AliasField("data__tags", setter=True).at(Self).data["tags"][:2]
-    tag = AliasField[m.TextField](setter=True, json=True, deleter=True).at(Self).data["tags"][0]
+    published_by = AliasField(setter=True, deleter=True).to(Self).publisher.name
+    tags = AliasField("data__tags", setter=True).to(Self).data["tags"][:2]
+    tag = AliasField[m.TextField](setter=True, json=True, deleter=True).to(Self).data["tags"][0]
     num_pages = (
         AliasField[m.IntegerField](setter=True, deleter=True, cast=True)
-        .at(Self)
+        .to(Self)
         .data["content"]["pages"]
     )
     is_short = AliasField[m.BooleanField](
         m.Case(m.When(num_pages__lte=m.Value(500), then=m.Value(True)), default=m.Value(False)),
     )
-    is_best_seller: bool = AliasField[m.BooleanField]().at(Self).data["is_best_seller"]
-    desc_r = AliasField[m.CharField](setter=True, default="").at(Self).data["description"]
-    desc_s = AliasField[m.CharField](setter=True).at(Self).data["description"]
-    desc_c = AliasField[m.CharField](setter=True).at(Self).data["description"]
-    chapters = AliasField(setter=True).at(Self).data["content"]["chapters"]
-    topics = AliasField(setter=True).at(Self).data["content"]["chapters"][0]["topics"]
+    is_best_seller: bool = AliasField[m.BooleanField]().to(Self).data["is_best_seller"]
+    desc_r = AliasField[m.CharField](setter=True, default="").to(Self).data["description"]
+    desc_s = AliasField[m.CharField](setter=True).to(Self).data["description"]
+    desc_c = AliasField[m.CharField](setter=True).to(Self).data["description"]
+    chapters = AliasField(setter=True).to(Self).data["content"]["chapters"]
+    topics = AliasField(setter=True).to(Self).data["content"]["chapters"][0]["topics"]
 
     commission: Decimal = AliasField[m.DecimalField](
         m.F("price") * m.F("publisher__commission"), max_digits=20, decimal_places=2, cache=False
