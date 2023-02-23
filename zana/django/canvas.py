@@ -3,7 +3,7 @@ import typing as t
 from collections import abc
 from functools import reduce
 from logging import getLogger
-from operator import attrgetter, or_
+from operator import attrgetter
 from types import GenericAlias
 
 from typing_extensions import Self

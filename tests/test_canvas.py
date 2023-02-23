@@ -1,7 +1,7 @@
 import math
 from collections import abc
 from copy import copy, deepcopy
-from operator import methodcaller, or_
+from operator import or_
 from types import SimpleNamespace
 from unittest.mock import Mock
 
