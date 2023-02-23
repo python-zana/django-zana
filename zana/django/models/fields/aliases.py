@@ -25,7 +25,7 @@ from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
 from django.db.models.query_utils import FilteredRelation
 from django.dispatch import receiver
-from zana.django.models import operator as op
+from zana.django import canvas as op
 from zana.django.models.fields import PseudoField
 
 if t.TYPE_CHECKING:
@@ -716,16 +716,16 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     @_weak_cached
     def source(self):
         src = self._source
-        if isinstance(src, op.Chain):
+        if isinstance(src, op.Signature):
             return src
         elif isinstance(src, str):
-            return op.Chain(op.Attr(src))
+            return op.Attr(src)
         elif isinstance(src, abc.Iterable):
             return op.Chain(*src)
         elif src is not None:
             raise TypeError(f"`{self!s}.source` expected `str` or `Accessor` but got {type(src)}")
         if isinstance(expr := self.expression, str):
-            return op.Chain(op.Attr(expr.replace("__", ".")))
+            return op.Attr(expr.replace("__", "."))
 
     def alias_evolve(self, arg=(), **kwds):
         if isinstance(arg, abc.Mapping):
