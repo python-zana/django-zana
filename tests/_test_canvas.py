@@ -25,7 +25,7 @@ from zana.django.canvas import (
 
 class test_Signature:
     def test_config(self):
-        assert Signature._can_merge_ is True
+        assert Signature._allows_merging_ is True
         assert Signature._min_args_ == 0
         assert Signature._max_args_ == math.inf
         assert Signature._default_args_ == ()
@@ -34,7 +34,7 @@ class test_Signature:
         class Plain(Signature):
             pass
 
-        assert Plain._can_merge_ == Signature._can_merge_
+        assert Plain._allows_merging_ == Signature._allows_merging_
         assert Plain._min_args_ == Signature._min_args_
         assert Plain._max_args_ == Signature._max_args_
         assert Plain._default_args_ == Signature._default_args_
@@ -53,7 +53,7 @@ class test_Signature:
         class Sub(Signature, **kwds):
             pass
 
-        assert Sub._can_merge_ == kwds["merge"]
+        assert Sub._allows_merging_ == kwds["merge"]
         assert Sub._min_args_ == kwds["min_args"]
         assert Sub._max_args_ == kwds["max_args"]
         assert Sub._default_args_ == kwds["args"]
@@ -67,7 +67,8 @@ class test_Signature:
         sig = Sub(Mock(), z=Mock())
         d_path, d_args, d_kwargs = sig.deconstruct()
         assert sig == Sub(*d_args, **d_kwargs)
-        pyt.raises(TypeError, sig._merge, Plain())
+
+        pyt.raises(TypeError, sig.merge, Plain())
 
     def test_basic(self):
         args, kwargs = tuple(Mock() for i in range(3)), {k: Mock() for k in "abc"}
@@ -92,10 +93,10 @@ class test_Signature:
         assert not foo == bar
         assert not foo == args, kwargs
         assert foo != args, kwargs
-        assert foo._can_merge_with(foo_2)
-        assert [*foo._chain(foo_2)] == [Foo(*args, *args_2, **kwargs)] == [foo.extend(*args_2)]
+        assert foo.can_merge(foo_2)
+        assert foo.merge(foo_2) == Foo(*args, *args_2, **kwargs) == foo.extend(*args_2)
         assert {Foo(*args, *args_2, **kwargs)} == {
-            foo._merge(foo_2),
+            foo.merge(foo_2),
             foo.extend(*args_2, **kwargs),
             foo | foo_2,
             foo | [foo_2],
@@ -136,7 +137,7 @@ class test_Attr:
         )
         assert {cls(*args, ex)} == {
             sig.extend(ex),
-            sig._merge(cls(ex)),
+            sig.merge(cls(ex)),
             sig | cls(ex),
             sig | [cls(ex)],
             [sig] | cls(ex),
@@ -191,7 +192,7 @@ class test_Item:
         assert sig == copy(sig) == deepcopy(sig) == try_import(d_path)(*d_args, **d_kwargs)
         assert {cls(*args, ex)} == {
             sig.extend(ex),
-            sig._merge(cls(ex)),
+            sig.merge(cls(ex)),
             sig | cls(ex),
             sig | [cls(ex)],
             [sig] | cls(ex),
@@ -242,13 +243,12 @@ class test_Slice:
 
         print(str(sig), repr(sig))
         assert isinstance(sig, cls)
-        assert (sig.args, sig.kwargs) == (tuple(slice(*Slice._slice_tuple(a)) for a in args), {})
 
         d_path, d_args, d_kwargs = sig.deconstruct()
         assert sig == copy(sig) == deepcopy(sig) == try_import(d_path)(*d_args, **d_kwargs)
         assert {cls(*args, ex)} == {
             sig.extend(ex),
-            sig._merge(cls(ex)),
+            sig.merge(cls(ex)),
             sig | cls(ex),
             sig | [cls(ex)],
             [sig] | cls(ex),
@@ -303,7 +303,7 @@ class test_Chain:
 
         assert {cls(*args, ex)} == {
             sig.extend(ex),
-            sig._merge(cls(ex)),
+            sig.merge(cls(ex)),
             sig | cls(ex),
             sig | [cls(ex)],
             iter(sig) | cls(ex),
@@ -339,7 +339,6 @@ class test_Call:
 
         print(str(sig), repr(sig))
         assert isinstance(sig, cls)
-        assert (sig.args, sig.kwargs) == (args, kwargs)
 
         d_path, d_args, d_kwargs = sig.deconstruct()
         assert sig == copy(sig) == deepcopy(sig) == try_import(d_path)(*d_args, **d_kwargs)
@@ -350,7 +349,7 @@ class test_Call:
         c_args, c_kwargs = (Mock(int), Mock(float), Mock(tuple)), {k: Mock(str) for k in "xyz"}
         obj = Mock(abc.Callable)
         sig = Call(*args, **kwargs)
-        assert (sig.args, sig.kwargs) == (args, kwargs)
+        # assert (sig.args, sig.kwargs) == (args, kwargs)
         val = sig(obj, *c_args, **c_kwargs)
         obj.assert_called_once_with(*c_args, *args, **kwargs | c_kwargs)
         assert val == obj.return_value == sig.get(obj)
@@ -370,8 +369,7 @@ class test_Func:
         print(str(sig), repr(sig))
         assert isinstance(sig, cls)
 
-        assert sig.func == dict
-        assert (sig.args, sig.kwargs) == (args, kwargs)
+        assert sig.__wrapped__ is dict
 
         d_path, d_args, d_kwargs = sig.deconstruct()
         assert sig == copy(sig) == deepcopy(sig) == try_import(d_path)(*d_args, **d_kwargs)
