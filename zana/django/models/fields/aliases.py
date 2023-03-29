@@ -7,7 +7,7 @@ from contextlib import suppress
 from functools import reduce, wraps
 from itertools import chain, repeat
 from logging import getLogger
-from operator import attrgetter, methodcaller, or_, setitem
+from operator import methodcaller, or_, setitem
 from threading import RLock
 from types import FunctionType, GenericAlias, MethodType, NoneType, new_class
 from weakref import WeakKeyDictionary
@@ -244,62 +244,6 @@ class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
         self.register(cls)
         cls._alias_fields_.clear()
         return cls
-
-
-# class ExpressionBuilder(t.Generic[_T]):
-#     __slots__ = ("__alias__", "__src__", "__expr__")
-
-#     __alias__: t.Final["AliasField[_T]"]
-#     __expr__: t.Final[tuple[_T_Expr, ...]]
-#     __src__: t.Final[o_p.Chain]
-
-#     if t.TYPE_CHECKING:
-#         __alias__ = __src__ = __expr__ = None
-
-#     def __new__(
-#         cls, alias: "AliasField[_T]", src: o_p.Chain = None, expr: tuple[_T_Expr] = ()
-#     ) -> Self:
-#         self = object.__new__(cls)
-#         self.__alias__, self.__src__, self.__expr__ = (
-#             alias,
-#             src or o_p.Chain(),
-#             tuple(expr or ()),
-#         )
-#         return self
-
-#     def __build__(self) -> "AliasField":
-#         if src := self.__src__:
-#             alias, expression = self.__alias__, self.__alias__.expression
-#             if (
-#                 e_list := not alias.has_expression() and self.__expr__
-#             ) and None not in e_list:
-#                 expression = m.F("__".join(e_list))
-#             return alias.alias_evolve(expression=expression, source=src)
-#         raise TypeError(f"cannot build empty expression")
-
-#     def __extend__(self, src=None, expr=None):
-#         return self.__class__(
-#             self.__alias__, self.__src__ | (src or ()), self.__expr__ + (expr,)
-#         )
-
-#     def __getattr__(self, name: str):
-#         if not isinstance(name, str) or name[:2] == "__" == name[-2:]:
-#             raise AttributeError(name)
-#         return self.__extend__(o_p.Attr(name), str(name))
-
-#     def __getitem__(self, key):
-#         if isinstance(key, slice):
-#             return self.__extend__(o_p.Slice(key))
-#         else:
-#             return self.__extend__(
-#                 o_p.Item(key), str(key) if isinstance(key, (str, int)) else None
-#             )
-
-#     def __call__(self, *args, **kwargs):
-#         return self.__extend__(o_p.Call(*args, **kwargs))
-
-#     def contribute_to_class(self, cls: t.Type[_T_Model], name: str, *a, **kw):
-#         return self.__build__().contribute_to_class(cls, name, *a, **kw)
 
 
 class BaseAliasDescriptor:
@@ -560,7 +504,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         "setter": "fset",
         "deleter": "fdel",
         "select": "select",
-        # "source": "_source",
         "coalesce": "_coalesce",
         "cache": "cache",
         "defer": "defer",
@@ -580,7 +523,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         cast=None,
         default=None,
         json=None,
-        # source=None,
         select=False,
         wrap=None,
         coalesce=False,
@@ -642,11 +584,10 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         self,
         expression: _T_Expr = None,
         getter: t.Union[abc.Callable[[_T_Model], _T], bool] = None,
-        setter: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool] = None,
+        setter: abc.Callable[[_T_Model, _T], t.NoReturn] = None,
         deleter: abc.Callable[[_T_Model], t.NoReturn] = None,
         *,
         select: bool = None,
-        # source: str | Composable = None,
         cache: bool = None,
         defer: bool = None,
         cast: bool = None,
@@ -702,7 +643,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
     @cached_attr
     def cache(self):
-        # return not not self.select or not self.fset or self.source)
         return not not self.select or not self.fset
 
     @property
@@ -732,21 +672,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
             ):
                 return True
 
-    # @property
-    # @_weak_cached
-    # def source(self):
-    #     src = self._source
-    #     if isinstance(src, Composable):
-    #         return compose(src)
-    #     elif isinstance(src, str):
-    #         return compose(attrgetter(src)(magic()))
-    #     elif src is not None:
-    #         raise TypeError(
-    #             f"`{self!s}.source` expected `str` or `Composable` but got {type(src)}"
-    #         )
-    #     # elif isinstance(expr := self.expression, str):
-    #     #     return compose(attrgetter(expr.replace("__", "."))(magic()))
-
     def alias_evolve(self, arg=(), **kwds):
         if isinstance(arg, abc.Mapping):
             arg = arg.items()
@@ -760,9 +685,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
     if t.TYPE_CHECKING:
         alias_evolve: type[Self]
-
-    # def to(self, source: _T_Src = None) -> _T_Src:
-    #     return ExpressionBuilder[_T](self)
 
     def annotation(self, expression: _T_Expr):
         self.alias_evolve(expression=expression)
@@ -936,9 +858,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         if self._internal_field_type_:
             kwargs["internal"] = self.get_deconstructing_internal_field()
 
-        # if "source" in kwargs:
-        #     kwargs["source"] = self.source
-
         base, prefix = (
             cls.types._base_,
             __name__[: __name__.index(".models.fields.") + 8],
@@ -971,49 +890,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
         return errors
 
-    # def _check_alias_setter(self):
-    #     source, select, cache, errors = self.source, self.select, self.cache, []
-    #     if self.fset is True and (not source or select or cache):
-    #         label = f"{self.__class__.__qualname__}"
-    #         if select:
-    #             errors += [
-    #                 checks.Error(
-    #                     f"Select {label} cannot have an implicit setter=True",
-    #                     hint=(
-    #                         "Set select=False, use a custom `setter` function, "
-    #                         "or remove setter=True argument on the field."
-    #                     ),
-    #                     obj=self,
-    #                     id="AliasField.E003",
-    #                 )
-    #             ]
-    #         elif cache:
-    #             errors += [
-    #                 checks.Error(
-    #                     f"Cached {label} cannot have an implicit `setter=True. ",
-    #                     hint=(
-    #                         "Set cache=False, use a custom `setter` function, "
-    #                         "or remove setter=True argument on the field."
-    #                     ),
-    #                     obj=self,
-    #                     id="AliasField.E004",
-    #                 )
-    #             ]
-    #         else:
-    #             errors += [
-    #                 checks.Error(
-    #                     f"{label}s with setter=True must have a `source`.",
-    #                     hint=(
-    #                         "Explicitly set `source`, use a custom `setter` function, "
-    #                         "or remove setter=True argument on the field."
-    #                     ),
-    #                     obj=self,
-    #                     id="AliasField.E005",
-    #                 )
-    #             ]
-
-    #     return errors
-
     def _check_alias_expression(self):
         cast, internal, errors = self.cast, self.get_internal_field(), []
         label = self.__class__.__name__
@@ -1043,8 +919,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
     def get_getter(self):
         fget = self.fget
-        if self.name == "tags":
-            print(f"*** {fget = } ***")
         if fget in (True, None):
             select, defer, name = self.select, self.defer, self.name
 
@@ -1074,25 +948,9 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         return fget or None
 
     def get_setter(self):
-        # source, func = self.source, self.fset
-        # if func is True and source is not None:
-        #     last, pre = source, None
-        # if isinstance(source, Composition):
-        #     last, pre = source[-1], source[:-1]
-        # if last.operator is ops.getattr:
-        #     last = ops.setattr(last.operator)
-        # elif last.operator is ops.getitem:
-        #     last = ops.setitem(last.operator)
-        # else:
-        #     raise TypeError(f"")
-
-        # func = source.set
         return self.fset
 
     def get_deleter(self):
-        # source, func = self.source, self.fdel
-        # if func is True and source:
-        #     func = source.delete
         return self.fdel
 
 
