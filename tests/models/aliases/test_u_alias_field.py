@@ -1,4 +1,5 @@
-from unittest.mock import Mock, patch
+from collections import abc
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -24,8 +25,8 @@ class test_AliasField:
         with (
             patch.object(m.IntegerField, "check", return_value=[]) as mk_super_check,
             patch.object(
-                AliasField, "_check_alias_setter", return_value=[]
-            ) as mk_check_alias_setter,
+                AliasField, "_check_access_mutators", return_value=[]
+            ) as mk_check_access_mutators,
             patch.object(
                 AliasField, "_check_alias_expression", return_value=[]
             ) as mk_check_alias_expression,
@@ -34,51 +35,38 @@ class test_AliasField:
             field = AliasField[m.IntegerField]()
             field.check(**kwargs)
             mk_super_check.assert_called_once_with(**kwargs)
-            mk_check_alias_setter.assert_called_once_with()
+            mk_check_access_mutators.assert_called_once_with()
             mk_check_alias_expression.assert_called_once_with()
 
-    def test__check_alias_setter(self):
-        @ImplementsAliases.register
-        class Test(BaseModel):
-            class Meta:
-                app_label = "aliases"
-
-            zoo = AliasField(m.F("field"), source="field", setter=True)
-
-            foo = AliasField(m.F("field"), setter=True)
-            bar = AliasField(m.F("field"), source="field", cache=True, setter=True)
-            baz = AliasField(m.F("field"), source="field", select=True, setter=True)
-
-        aka = Test._alias_fields_
-
-        assert not aka["zoo"]._check_alias_setter()
-
-        foo_error, *_ = aka["foo"]._check_alias_setter()
-        assert isinstance(foo_error, checks.Error)
-        foo_error.id = "AliasField.E005"
-
-        bar_error, *_ = aka["bar"]._check_alias_setter()
-        assert isinstance(bar_error, checks.Error)
-        bar_error.id = "AliasField.E004"
-
-        baz_error, *_ = aka["baz"]._check_alias_setter()
-        assert isinstance(baz_error, checks.Error)
-        baz_error.id = "AliasField.E003"
+    @pytest.mark.parametrize(
+        "at, err, val",
+        [
+            ("getter", None, None),
+            ("getter", None, Mock(bool)),
+            ("getter", None, Mock(abc.Callable)),
+            ("getter", "E002", object()),
+            ("setter", None, None),
+            ("setter", None, Mock(abc.Callable)),
+            ("setter", "E003", object()),
+            ("deleter", None, None),
+            ("deleter", None, Mock(abc.Callable)),
+            ("deleter", "E004", object()),
+        ],
+    )
+    def test__check_access_mutators(self, at, err, val):
+        aka = AliasField(m.F("field"), **{at: val})
+        errors = aka._check_access_mutators()
+        if err:
+            assert any(e.id in (None, f"AliasField.{err}") for e in errors)
+        else:
+            assert not errors
 
     def test__check_alias_expression(self):
-        @ImplementsAliases.register
-        class Test(BaseModel):
-            class Meta:
-                app_label = "aliases"
+        zoo = AliasField[m.IntegerField](m.F("field"), cast=True)
+        foo = AliasField(m.F("field"), cast=True)
 
-            zoo = AliasField[m.IntegerField](m.F("field"), cast=True)
+        assert not zoo._check_alias_expression()
 
-            foo = AliasField(m.F("field"), cast=True)
-
-        aka = Test._alias_fields_
-
-        assert not aka["zoo"]._check_alias_expression()
-
-        foo_error, *_ = aka["foo"]._check_alias_expression()
+        foo_error, *_ = foo._check_alias_expression()
         assert isinstance(foo_error, checks.Error)
-        foo_error.id = "AliasField.E002"
+        assert foo_error.id == "AliasField.E001"

@@ -134,6 +134,7 @@ class Migration(migrations.Migration):
                     "rating",
                     models.SmallIntegerField(
                         choices=[
+                            (0, "None"),
                             (1, "Very Bad"),
                             (2, "Bad"),
                             (3, "Average"),
@@ -149,9 +150,14 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "published_on",
-                    models.DateTimeField(default=example.aliases.models.rand_date, null=True),
+                    models.DateTimeField(
+                        default=example.aliases.models.rand_date, null=True
+                    ),
                 ),
-                ("data", models.JSONField(default=example.aliases.models.Book.default_data)),
+                (
+                    "data",
+                    models.JSONField(default=example.aliases.models.Book.default_data),
+                ),
                 (
                     "authors",
                     models.ManyToManyField(related_name="books", to="aliases.author"),

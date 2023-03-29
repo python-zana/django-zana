@@ -9,7 +9,7 @@ from types import GenericAlias as GenericAliasType
 from types import MethodType
 
 from typing_extensions import Self
-from zana.common import NotSet, cached_attr
+from zana.util import NotSet, cached_attr
 
 from django.apps import apps
 from django.core import checks
@@ -177,10 +177,19 @@ class alias(t.Generic[_T]):
         verbose_name: str = None,
         order_field: t.Any = None,
     ) -> None:
-        self.annotate, self.attr, self.expression, self.defer = annotate, attr, expression, defer
+        self.annotate, self.attr, self.expression, self.defer = (
+            annotate,
+            attr,
+            expression,
+            defer,
+        )
         self.fget, self.fset, self.fdel, self.doc = getter, setter, deleter, doc
         self.output_field, self.default, self.cache = output_field, default, cache
-        self.boolean, self.verbose_name, self.order_field = verbose_name, order_field, boolean
+        self.boolean, self.verbose_name, self.order_field = (
+            verbose_name,
+            order_field,
+            boolean,
+        )
         if default is NotSet:
             self.get_default = None
         elif isinstance(default, _T_Func):  # pragma: no cover
@@ -259,7 +268,12 @@ class alias(t.Generic[_T]):
         setattr(cls, name, descriptor)
 
     def _prepare(self, cls: t.Type[_T_Model], name: str):
-        annotate, attr, cache, expression = self.annotate, self.attr, self.cache, self.expression
+        annotate, attr, cache, expression = (
+            self.annotate,
+            self.attr,
+            self.cache,
+            self.expression,
+        )
         fget, fset, fdel, defer = self.fget, self.fset, self.fdel, self.defer
 
         if attr is None:
@@ -294,8 +308,19 @@ class alias(t.Generic[_T]):
                 ) % (("Annotated", "annotate") if annotate else ("Cached", "cache"))
             raise ImproperlyConfigured(f"alias {name!r} on {cls.__name__!r}. {msg}")
 
-        self.annotate, self.attr, self.cache, self.expression = annotate, attr, cache, expression
-        self.fget, self.fset, self.fdel, self.name, self.defer = fget, fset, fdel, name, defer
+        self.annotate, self.attr, self.cache, self.expression = (
+            annotate,
+            attr,
+            cache,
+            expression,
+        )
+        self.fget, self.fset, self.fdel, self.name, self.defer = (
+            fget,
+            fset,
+            fdel,
+            name,
+            defer,
+        )
 
     def get_descriptor_class(self, cls):
         return CachedAliasDescriptor if self.cache else DynamicAliasDescriptor
@@ -320,7 +345,11 @@ class alias(t.Generic[_T]):
                     nonlocal name
                     if self._state.adding:  # pragma: no cover
                         raise AttributeError(name)
-                    qs = self._meta.base_manager.filter(pk=self.pk).alias(name).annotate(name)
+                    qs = (
+                        self._meta.base_manager.filter(pk=self.pk)
+                        .alias(name)
+                        .annotate(name)
+                    )
                     return qs.values_list(name, flat=True).first()
 
         if fget and default is not None:
@@ -358,7 +387,9 @@ class _Patcher:
 
     @staticmethod
     def model(cls: type[_T_Model]):
-        mro = (b.refresh_from_db for b in cls.__mro__ if "refresh_from_db" in b.__dict__)
+        mro = (
+            b.refresh_from_db for b in cls.__mro__ if "refresh_from_db" in b.__dict__
+        )
         if not all(getattr(b, "_loads_aliases_", None) for b in mro):
             orig_refresh_from_db = cls.refresh_from_db
 
@@ -368,7 +399,9 @@ class _Patcher:
                 if dct := get_query_aliases(self.__class__):
                     if fields_ := fields:
                         fields = list(fields)
-                        aliases = (n for n in fields if not (n in dct and not fields.remove(n)))
+                        aliases = (
+                            n for n in fields if not (n in dct and not fields.remove(n))
+                        )
                     else:
                         aliases = (n for n, a in dct.items() if a.cache)
 
@@ -422,7 +455,9 @@ class _Patcher:
                     }
 
                 _initial_query_aliases_.__set_name__(cls, "_initial_query_aliases_")
-                _initial_query_annotations_.__set_name__(cls, "_initial_query_annotations_")
+                _initial_query_annotations_.__set_name__(
+                    cls, "_initial_query_annotations_"
+                )
 
                 cls._initial_query_aliases_ = _initial_query_aliases_
                 cls._initial_query_annotations_ = _initial_query_annotations_

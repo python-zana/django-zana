@@ -1499,14 +1499,14 @@ files = [
 
 [[package]]
 name = "zana"
-version = "0.1.10"
+version = "0.2.0a1"
 description = "general utility functions and types"
 category = "main"
 optional = false
 python-versions = ">=3.10,<4.0"
 files = [
-    {file = "zana-0.1.10-py3-none-any.whl", hash = "sha256:e221c8d33c6597a20f54594838887811b97db05d041f87a6a8fd0fcbb6c544e4"},
-    {file = "zana-0.1.10.tar.gz", hash = "sha256:ed2a0ba473bd782afc76cebea0a12f1fa528c244832feb5648a2bc62f1169f4a"},
+    {file = "zana-0.2.0a1-py3-none-any.whl", hash = "sha256:838cb7461593a299f7adffd7c1e4a9ded353765cd37ddad447766f63e4bebb3b"},
+    {file = "zana-0.2.0a1.tar.gz", hash = "sha256:e224a9084b4f90e55943a16fd762e2f630d2645e35bac510912085ec8a3f3955"},
 ]
 
 [package.dependencies]
@@ -1516,4 +1516,4 @@ typing-extensions = ">=4.4.0,<5.0.0"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<4.0"
-content-hash = "be8b52c5dfd44f04f48dd57aa26271c6c869eff28e07093921f335fcfcafb02e"
+content-hash = "6e1be12ec5366cc17a0d3bec3b8aabc7896d5b34290b43fe5c0fe4ccacb310af"

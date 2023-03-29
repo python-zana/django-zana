@@ -21,7 +21,7 @@ build-backend = "poetry.core.masonry.api"
 python = ">=3.10,<4.0"
 Django = ">=3.2.0"
 typing-extensions = ">=4.4.0"
-zana = ">=0.1.10,<0.2.0"
+zana = {version = "^0.2.0a2", allow-prereleases = true}
 
 
 [tool.poetry.group.dev]

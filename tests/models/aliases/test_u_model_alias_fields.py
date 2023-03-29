@@ -18,9 +18,9 @@ class test_ModelAliasField:
             class Meta:
                 app_label = "aliases"
 
-            foo = AliasField(m.F("field"), setter=True)
-            bar = AliasField(m.F("field"), source="field", cache=True, setter=True)
-            baz = AliasField(m.F("field"), source="field", select=True, setter=True)
+            foo = AliasField(m.F("field"))
+            bar = AliasField(m.F("field"), cache=True)
+            baz = AliasField(m.F("field"), select=True)
 
         aka = get_alias_fields(Test123)
 
@@ -47,7 +47,7 @@ class test_ModelAliasField:
             class Meta:
                 app_label = "aliases"
 
-            zoo = AliasField(m.F("field"), source="field")
+            zoo = AliasField(m.F("field"))
 
         class TestBase(Test123):
             class Meta:
@@ -61,13 +61,15 @@ class test_ModelAliasField:
                 app_label = "aliases"
                 proxy = True
 
-            bar = AliasField(m.F("field"), source="field")
+            bar = AliasField(m.F("field"))
 
         assert get_alias_fields(TestChild_1)["foo"] == TestBase._meta.get_field("foo")
 
         with pytest.raises(
             ImproperlyConfigured,
-            match=re.compile(r"(?:.*(?:foo)?.*AliasField.*)|(?:.*AliasField.*(?:foo)?.*)"),
+            match=re.compile(
+                r"(?:.*(?:foo)?.*AliasField.*)|(?:.*AliasField.*(?:foo)?.*)"
+            ),
         ):
 
             class TestChild_2(TestBase):
@@ -75,4 +77,4 @@ class test_ModelAliasField:
                     app_label = "aliases"
                     proxy = True
 
-                foo = AliasField(m.F("field"), setter=True)
+                foo = AliasField(m.F("field"))
