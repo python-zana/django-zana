@@ -84,8 +84,7 @@ class test_AliasField:
             assert e_books[0].version == e_books[0].updated_at
         # assert 0
 
-    @pytest.mark.using_db("sqlite", "postgresql", "mysql")
-    def test_books(self, db_backends):
+    def test_books(self):
         book: Book
         publishers = Publisher.create_samples(3)
         authors = Author.create_samples(6)

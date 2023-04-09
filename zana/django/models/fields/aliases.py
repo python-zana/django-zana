@@ -1148,12 +1148,7 @@ class _Patcher:
                     if isinstance(annotation, FilteredRelation):
                         clone.query.add_filtered_relation(annotation, alias)
                     else:
-                        clone.query.add_annotation(
-                            annotation,
-                            alias,
-                            is_summary=False,
-                            select=select,
-                        )
+                        clone.query.add_annotation(annotation, alias, select=select)
                 for alias, annotation in clone.query.annotations.items():
                     if alias in annotations and annotation.contains_aggregate:
                         if clone._fields is None:

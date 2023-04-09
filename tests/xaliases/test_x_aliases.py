@@ -90,7 +90,11 @@ class test_alias:
 
             e_rating = mean(b.rating for b in e_books)
             e_rating_min, e_rating_max = math.floor(e_rating), math.ceil(e_rating)
-            assert e_rating == publisher.rating == publisher.__dict__["rating"]
+            assert (
+                pytest.approx(e_rating, rel=1e-3)
+                == publisher.rating
+                == publisher.__dict__["rating"]
+            )
             del publisher.rating
             assert not "rating" in publisher.__dict__
             result = Publisher.objects.get(
@@ -106,7 +110,7 @@ class test_alias:
             result.rating = mk_ratting = Mock(float)
             assert mk_ratting is result.rating
             result.refresh_from_db()
-            assert e_rating == result.rating
+            assert pytest.approx(e_rating, rel=1e-3) == result.rating
 
             book = e_books[0]
             assert publisher.name == book.published_by

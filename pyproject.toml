@@ -17,11 +17,13 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 
+
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
 Django = ">=3.2.0"
 typing-extensions = ">=4.4.0"
-zana = {version = "^0.2.0a2", allow-prereleases = true}
+zana = {version = "^0.2.0a3", allow-prereleases = true}
+
 
 
 [tool.poetry.group.dev]
@@ -30,8 +32,8 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 black = "*"
 ipython = "^8.10.0"
-mysqlclient = "^2.1.1"
-psycopg2-binary = "^2.9.5"
+django-polymorphic = "^3.1.0"
+tox = "^4.4.8"
 
 
 [tool.poetry.group.test]
@@ -43,6 +45,9 @@ pytest-asyncio = "^0.20.3"
 pytest-cov = {version = "^4.0.0", extras = ["toml"]}
 pytest-django = "^4.5.2"
 django-polymorphic = "^3.1.0"
+tox = "^4.4.8"
+mysqlclient = "^2.1.1"
+psycopg = "^3.1.8"
 
 
 [tool.poetry.group.docs]
