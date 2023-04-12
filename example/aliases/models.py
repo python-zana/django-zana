@@ -268,7 +268,6 @@ class Book(BaseModel, PolymorphicModel):
             m.When(num_pages__lte=m.Value(500, m.JSONField()), then=m.Value(True)),
             default=m.Value(False),
         ),
-        cast=True,
     )
     is_best_seller: bool = AliasField[m.BooleanField](
         "data__is_best_seller", getter=this.data["is_best_seller"](...)
