@@ -259,16 +259,16 @@ class Book(BaseModel, PolymorphicModel):
     )
     num_pages = AliasField[m.IntegerField](
         "data__content__pages",
-        cast=True,
         getter=this.data["content"]["pages"](...),
         setter=this.data["content"](...) | ops.setitem("pages"),
         deleter=this.data["content"](...) | ops.delitem("pages"),
     )
     is_short = AliasField[m.BooleanField](
         m.Case(
-            m.When(num_pages__lte=m.Value(500), then=m.Value(True)),
+            m.When(num_pages__lte=m.Value(500, m.JSONField()), then=m.Value(True)),
             default=m.Value(False),
         ),
+        cast=True,
     )
     is_best_seller: bool = AliasField[m.BooleanField](
         "data__is_best_seller", getter=this.data["is_best_seller"](...)

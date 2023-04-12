@@ -27,6 +27,11 @@ from django.db.models.functions import Coalesce
 from django.db.models.query_utils import FilteredRelation
 from django.dispatch import receiver
 
+try:
+    from psycopg.types.json import Jsonb
+except ImportError:
+    Jsonb = None
+
 from . import PseudoField
 
 if t.TYPE_CHECKING:
@@ -360,6 +365,8 @@ class ConcreteTypeRegistryType(type):
 
             dump_vendors = {"postgresql", "mysql"}
             non_dump_types = NoneType | _JSONString
+            if Jsonb:
+                non_dump_types |= Jsonb
 
             class Base(base):
                 pass
@@ -375,6 +382,7 @@ class ConcreteTypeRegistryType(type):
 
                 def get_prep_value(self, value, *, dump=None, prepared=True):
                     values = [value, None, None]
+                    vcls = type(value)
                     if not (dump and prepared):
                         value = super(Base, self).get_prep_value(value)
                         values[1] = value
