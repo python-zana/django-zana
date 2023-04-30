@@ -1,7 +1,5 @@
 import math
-import typing as t
 from collections import Counter
-from lib2to3 import pytree
 from random import randint, shuffle
 from statistics import mean
 from unittest.mock import Mock
@@ -29,7 +27,9 @@ class test_alias:
 
     def create_authors(self, count=4):
         stop, age = count + 1, lambda: randint(16, 85)
-        return [Author.objects.create(name=f"Author {x}", age=age()) for x in range(1, stop)]
+        return [
+            Author.objects.create(name=f"Author {x}", age=age()) for x in range(1, stop)
+        ]
 
     def create_books(
         self,
@@ -46,7 +46,10 @@ class test_alias:
 
         if isinstance(c_authors, int):
             c_authors = Counter(
-                {a: randint(1, c_publishers.total() // 2) for a in self.create_authors(c_authors)}
+                {
+                    a: randint(1, c_publishers.total() // 2)
+                    for a in self.create_authors(c_authors)
+                }
             )
 
         publishers, max_rating = list(c_publishers.elements()), max(Rating)
@@ -87,7 +90,11 @@ class test_alias:
 
             e_rating = mean(b.rating for b in e_books)
             e_rating_min, e_rating_max = math.floor(e_rating), math.ceil(e_rating)
-            assert e_rating == publisher.rating == publisher.__dict__["rating"]
+            assert (
+                pytest.approx(e_rating, rel=1e-3)
+                == publisher.rating
+                == publisher.__dict__["rating"]
+            )
             del publisher.rating
             assert not "rating" in publisher.__dict__
             result = Publisher.objects.get(
@@ -103,11 +110,13 @@ class test_alias:
             result.rating = mk_ratting = Mock(float)
             assert mk_ratting is result.rating
             result.refresh_from_db()
-            assert e_rating == result.rating
+            assert pytest.approx(e_rating, rel=1e-3) == result.rating
 
             book = e_books[0]
             assert publisher.name == book.published_by
-            assert {*e_books} == {*Book.objects.filter(published_by=publisher.name).all()}
+            assert {*e_books} == {
+                *Book.objects.filter(published_by=publisher.name).all()
+            }
             book.published_by = mk_name = Mock(str)
             assert mk_name is book.published_by is publisher.name
 

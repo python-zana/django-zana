@@ -110,6 +110,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "polymorphic",
     "zana.django",
+    "tests.app",
     "example.aliases",
     "example.xaliases",
 ]

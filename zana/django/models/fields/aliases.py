@@ -13,20 +13,26 @@ from types import FunctionType, GenericAlias, MethodType, NoneType, new_class
 from weakref import WeakKeyDictionary
 
 from typing_extensions import Self
-from zana.common import cached_attr, pipeline
+from zana.canvas import maybe_compose
 from zana.types import NotSet
-from zana.types.collections import FrozenDict
+from zana.types.collections import DefaultDict, FrozenDict
+from zana.util import cached_attr
+from zana.util.operator import pipeline
 
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models as m
-from django.db.models.expressions import Combinable
 from django.db.models.functions import Coalesce
 from django.db.models.query_utils import FilteredRelation
 from django.dispatch import receiver
-from zana.django.models.fields import PseudoField
-from zana.django.utils import operator as op
+
+try:
+    from psycopg.types.json import Jsonb
+except ImportError:
+    Jsonb = None
+
+from . import PseudoField
 
 if t.TYPE_CHECKING:
     from django.db.backends.base.base import BaseDatabaseWrapper
@@ -41,9 +47,9 @@ _T_Default = t.TypeVar("_T_Default")
 _T_Model = t.TypeVar("_T_Model", bound="ImplementsAliases", covariant=True)
 _T_Field = t.TypeVar("_T_Field", bound=m.Field, covariant=True)
 _T_Expr = t.Union[
-    Combinable,
+    m.expressions.Combinable,
     str,
-    t.Callable[[], Combinable | str],
+    t.Callable[[], m.expressions.Combinable | str],
 ]
 _T_Func = FunctionType | staticmethod | classmethod | MethodType | type
 
@@ -56,31 +62,6 @@ def get_alias_fields(model: type[_T_Model], default: _T_Default = None):
     if fields and isinstance(fields, ModelAliasFields):
         return fields
     return default
-
-
-class FallbackDict(dict[_KT, _VT | _FT], t.Generic[_KT, _FT, _VT]):
-    __slots__ = ("fallback",)
-    fallback: t.Final[_FT]
-
-    __dict_init = dict.__init__
-
-    def __init__(self, fallback: _FT = None, /, *args, **kwargs):
-        self.fallback = fallback
-        self.__dict_init(*args, **kwargs)
-
-    def __missing__(self, key: _KT):
-        return self.fallback
-
-    def __or__(self, x):
-        return self.__class__(self.fallback, {**self, **x})
-
-    def __ror__(self, x):
-        return self.__class__(self.fallback, {**x, **self})
-
-    def copy(self):
-        return self.__class__(self.fallback, self)
-
-    __copy__ = copy
 
 
 class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
@@ -115,7 +96,12 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
     _lock: t.Final[RLock]
 
     def __init__(self, model: type[_T_Model]) -> None:
-        self.model, self._lock, self._populated, self._ready = model, RLock(), False, False
+        self.model, self._lock, self._populated, self._ready = (
+            model,
+            RLock(),
+            False,
+            False,
+        )
 
     def prepare(self):
         with self._lock:
@@ -131,7 +117,9 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
             for b in cls.__mro__[1:][::-1]:
                 own = self.fields
                 if issubclass(b, ImplementsAliases):
-                    if b._meta.proxy or (b._meta.abstract and not issubclass(concrete, b)):
+                    if b._meta.proxy or (
+                        b._meta.abstract and not issubclass(concrete, b)
+                    ):
                         for n, af in b._alias_fields_.local.items():
                             if n not in own:
                                 cls._meta.add_field(copy.deepcopy(af), True)
@@ -158,7 +146,12 @@ class ModelAliasFields(abc.Mapping[str, "AliasField"], t.Generic[_T_Model]):
                 field.select and maps.append(select)
                 [map.setdefault(name, field) for map in maps]
 
-        self.fields, self.eager, self.deferred, self.selected = fields, eager, defer, select
+        self.fields, self.eager, self.deferred, self.selected = (
+            fields,
+            eager,
+            defer,
+            select,
+        )
         self.local, self.cached, self.dynamic = local, cache, dynamic
 
     def clear(self):
@@ -241,7 +234,7 @@ class ImplementsAliasesManager(
     ABC, m.Manager[_T_Model] if t.TYPE_CHECKING else t.Generic[_T_Model]
 ):
     model: type[_T_Model]
-    _initial_alias_fields_: t.Final[abc.Mapping[str, Combinable]] = ...
+    _initial_alias_fields_: t.Final[abc.Mapping[str, m.expressions.Combinable]] = ...
     _initial_annotated_alias_fields_: t.Final[abc.Mapping[str, m.F]] = ...
 
 
@@ -256,52 +249,6 @@ class ImplementsAliases(ABC, m.Model if t.TYPE_CHECKING else object):
         self.register(cls)
         cls._alias_fields_.clear()
         return cls
-
-
-class ExpressionBuilder(t.Generic[_T]):
-    __slots__ = ("__alias__", "__src__", "__expr__")
-
-    __alias__: t.Final["AliasField[_T]"]
-    __expr__: t.Final[tuple[_T_Expr, ...]]
-    __src__: t.Final[op.Accessor]
-
-    if t.TYPE_CHECKING:
-        __alias__ = __src__ = __expr__ = None
-
-    def __new__(
-        cls, alias: "AliasField[_T]", src: op.Accessor = None, expr: tuple[_T_Expr] = ()
-    ) -> Self:
-        self = object.__new__(cls)
-        self.__alias__, self.__src__, self.__expr__ = alias, src or op.Accessor(), tuple(expr or ())
-        return self
-
-    def __build__(self) -> "AliasField":
-        if src := self.__src__:
-            alias, expression = self.__alias__, self.__alias__.expression
-            if (e_list := not alias.has_expression() and self.__expr__) and None not in e_list:
-                expression = m.F("__".join(e_list))
-            return alias.alias_evolve(expression=expression, source=src)
-        raise TypeError(f"cannot build empty expression")
-
-    def __extend__(self, src=None, expr=None):
-        return self.__class__(self.__alias__, self.__src__ | (src or ()), self.__expr__ + (expr,))
-
-    def __getattr__(self, name: str):
-        if not isinstance(name, str) or name[:2] == "__" == name[-2:]:
-            raise AttributeError(name)
-        return self.__extend__(op.Attr(name), str(name))
-
-    def __getitem__(self, key):
-        if isinstance(key, slice):
-            return self.__extend__(op.Slice(key))
-        else:
-            return self.__extend__(op.Item(key), str(key) if isinstance(key, (str, int)) else None)
-
-    def __call__(self, *args, **kwargs):
-        return self.__extend__(op.Call(*args, **kwargs))
-
-    def contribute_to_class(self, cls: t.Type[_T_Model], name: str, *a, **kw):
-        return self.__build__().contribute_to_class(cls, name, *a, **kw)
 
 
 class BaseAliasDescriptor:
@@ -323,7 +270,9 @@ class CachedAliasDescriptor(BaseAliasDescriptor, cached_attr[_T]):
 class ConcreteTypeRegistryType(type):
     _internal_type_map_: abc.Mapping[type[_T_Field], "type[_T_Field | AliasField]"]
     _name_type_map_: abc.Mapping[type[_T_Field], "type[_T_Field] | type[AliasField]"]
-    _json_compat_types_: abc.Mapping[type[_T_Field], "type[_T_Field] | type[m.JSONField]"]
+    _json_compat_types_: abc.Mapping[
+        type[_T_Field], "type[_T_Field] | type[m.JSONField]"
+    ]
     _base_: t.Final[type["AliasField"]]
     _basename_: t.Final[str]
     _lock_: RLock
@@ -332,7 +281,11 @@ class ConcreteTypeRegistryType(type):
     def __new__(self, name, bases, nspace: dict, /, **kw) -> None:
         cls = super().__new__(self, name, bases, nspace, **kw)
         cls._lock_ = RLock()
-        cls._internal_type_map_, cls._name_type_map_, cls._json_compat_types_ = {}, {}, {}
+        cls._internal_type_map_, cls._name_type_map_, cls._json_compat_types_ = (
+            {},
+            {},
+            {},
+        )
         return cls
 
     def __set_name__(self, owner: type["AliasField"], name: str):
@@ -358,33 +311,34 @@ class ConcreteTypeRegistryType(type):
             except KeyError:
                 return self(cls)
 
-    def __call__(self: type["ConcreteTypeRegistry"], cls: type[_T_Field], /, name: str = None):
+    def __call__(
+        self: type["ConcreteTypeRegistry"], cls: type[_T_Field], /, name: str = None
+    ):
         c2t: dict[type[cls], type[cls] | type["AliasField"]]
         n2t: dict[str, type[cls] | type["AliasField"]]
 
         assert isinstance(cls, type) and issubclass(cls, m.Field)
-        base, c2t, n2t = self._new_base_(cls), self._internal_type_map_, self._name_type_map_
-        assert issubclass(base, cls)
+        c2t, n2t = self._internal_type_map_, self._name_type_map_
 
         with self._lock_:
             assert (
-                c not in c2t for c in (cls, base)
+                c not in c2t for c in (cls, cls)
             ), f"type for concrete base {cls.__name__} already exists"
-            name = self._new_name_(name or base.__name__)
+            name = self._new_name_(name or cls.__name__)
             module, qualname = self.__module__, f"{self.__qualname__}.{name}"
 
-            n2t[name] = c2t[cls] = c2t[base] = new_class(
+            n2t[name] = c2t[cls] = c2t[cls] = new_class(
                 name,
-                (self._base_, base),
+                (self._base_, cls),
                 None,
                 methodcaller(
                     "update",
                     self._new_class_dict_(
-                        base,
+                        cls,
                         {
                             "__module__": module,
                             "__qualname__": qualname,
-                            "_internal_field_type_": base,
+                            "_internal_field_type_": cls,
                         },
                     ),
                 ),
@@ -411,6 +365,8 @@ class ConcreteTypeRegistryType(type):
 
             dump_vendors = {"postgresql", "mysql"}
             non_dump_types = NoneType | _JSONString
+            if Jsonb:
+                non_dump_types |= Jsonb
 
             class Base(base):
                 pass
@@ -426,6 +382,7 @@ class ConcreteTypeRegistryType(type):
 
                 def get_prep_value(self, value, *, dump=None, prepared=True):
                     values = [value, None, None]
+                    vcls = type(value)
                     if not (dump and prepared):
                         value = super(Base, self).get_prep_value(value)
                         values[1] = value
@@ -437,7 +394,10 @@ class ConcreteTypeRegistryType(type):
                     return value
 
                 def should_json_dump(self, value, conn: "BaseDatabaseWrapper"):
-                    return not isinstance(value, non_dump_types) and conn.vendor in dump_vendors
+                    return (
+                        not isinstance(value, non_dump_types)
+                        and conn.vendor in dump_vendors
+                    )
 
                 def get_db_prep_value(
                     self, value, connection: "BaseDatabaseWrapper", prepared=False
@@ -455,10 +415,15 @@ class ConcreteTypeRegistryType(type):
                     if value is not None:
                         if isinstance(value, (str, bytes, bytearray)):
                             if connection.vendor in dump_vendors:
-                                value = json_base.from_db_value(self, value, expr, connection)
+                                value = json_base.from_db_value(
+                                    self, value, expr, connection
+                                )
                         if self._has_base_from_db_value_:
                             value = base.from_db_value(self, value, expr, connection)
                     return value
+
+                def formfield(self, **kwargs):
+                    return super(Base, self).formfield(**kwargs)
 
             klass = self._json_compat_types_.setdefault(key, JSONCompatBase)
             return klass
@@ -472,23 +437,18 @@ class ConcreteTypeRegistryType(type):
                 if name not in n2t:
                     return name
             else:  # pragma: no cover
-                raise RuntimeError(f"unable to find a unique qualname for {name[:-3]!r}")
-
-    def _new_base_(self, cls: type[_T_Field]):
-        return cls
-
-    def _new_init_defaults_(self, cls: type[_T_Field]):
-        by_type = self._concrete_init_defaults_
-        return reduce(
-            or_,
-            [
-                *(by_type[b] for b in cls.__mro__[::-1] if b in by_type),
-                self._base_._INIT_DEFAULTS_,
-            ],
-        )
+                raise RuntimeError(
+                    f"unable to find a unique qualname for {name[:-3]!r}"
+                )
 
     def _new_class_dict_(self: type[Self], cls: type[_T_Field], nspace: dict):
-        return nspace | {"_INIT_DEFAULTS_": self._new_init_defaults_(cls)}
+        by_type, defaults = self._concrete_init_defaults_, self._base_._INIT_DEFAULTS_
+        return nspace | {
+            "_INIT_DEFAULTS_": reduce(
+                or_,
+                [*(by_type[b] for b in cls.__mro__[::-1] if b in by_type), defaults],
+            )
+        }
 
 
 class _JSONString(str):
@@ -547,38 +507,36 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     ]
 
     _KWARGS_TO_ATTRS_ = {
-        "expression": op.Attr("expression"),
-        "getter": op.Attr("fget"),
-        "setter": op.Attr("fset"),
-        "deleter": op.Attr("fdel"),
-        "select": op.Attr("select"),
-        "source": op.Attr("_source"),
-        "coalesce": op.Attr("_coalesce"),
-        "cache": op.Attr("cache"),
-        "defer": op.Attr("defer"),
-        "cast": op.Attr("cast"),
-        "wrap": op.Attr("_wrap"),
-        "json": op.Attr("json"),
-        "json_options": op.Attr("_json_options"),
+        "expression": "expression",
+        "getter": "fget",
+        "setter": "fset",
+        "deleter": "fdel",
+        "select": "select",
+        "coalesce": "_coalesce",
+        "cache": "cache",
+        "defer": "defer",
+        "cast": "cast",
+        "wrap": "_wrap",
+        "json": "json",
+        "json_options": "_json_options",
     }
-    _INIT_DEFAULTS_ = FallbackDict(
+    _INIT_DEFAULTS_ = DefaultDict(
+        (),
         NotSet,
         expression=None,
         getter=None,
         setter=None,
         deleter=None,
-        editable=False,
-        default=None,
         defer=False,
         cast=None,
+        default=None,
         json=None,
-        source=None,
         select=False,
         wrap=None,
         coalesce=False,
-        json_options=None,
+        json_options=lambda: dict(encoder=None, decoder=None),
     )
-    _NULLABLE_INIT_DEFAULTS_ = {"select", "coalesce", "defer"}
+    _NULLABLE_INIT_DEFAULTS_ = {"select", "coalesce", "defer", "json_options"}
 
     name: str
     expression: _T_Expr = None
@@ -586,7 +544,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     json: bool
 
     verbose_name: str
-    _source: str | op.Accessor
+    # _source: str | Composable
     _coalesce: _T_Expr | bool | None
     _cached_descriptor_class_ = CachedAliasDescriptor
     _dynamic_descriptor_class_ = DynamicAliasDescriptor
@@ -613,9 +571,13 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
                 cls, params = cls.types[param], params[1:]
         return GenericAlias(cls, params)
 
-    def __new__(cls: type[Self], *a, internal: _T_Field = None, **kw) -> _T | Self | _T_Field:
+    def __new__(
+        cls: type[Self], *a, internal: _T_Field = None, **kw
+    ) -> _T | Self | _T_Field:
         if internal is not None and cls._internal_field_type_ is None:
-            cls = cls.types[internal if isinstance(internal, type) else internal.__class__]
+            cls = cls.types[
+                internal if isinstance(internal, type) else internal.__class__
+            ]
 
         self: _T | Self | _T_Field = object.__new__(cls)
         return self
@@ -630,11 +592,10 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         self,
         expression: _T_Expr = None,
         getter: t.Union[abc.Callable[[_T_Model], _T], bool] = None,
-        setter: t.Union[abc.Callable[[_T_Model, _T], t.NoReturn], bool] = None,
+        setter: abc.Callable[[_T_Model, _T], t.NoReturn] = None,
         deleter: abc.Callable[[_T_Model], t.NoReturn] = None,
         *,
         select: bool = None,
-        source: str | op.Accessor = None,
         cache: bool = None,
         defer: bool = None,
         cast: bool = None,
@@ -650,7 +611,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     def __init__(self, *args, internal: _T_Field = None, **kwds) -> None:
         self._init_args_ = set()
         args = args and kwds.update({k: v for k, v in zip(self._POS_ARGS_, args)}) or ()
-        kwds, k2a = self._INIT_DEFAULTS_ | kwds, self._KWARGS_TO_ATTRS_
+        kwds, k2a = self._init_defaults_ | kwds, self._KWARGS_TO_ATTRS_
         local = {k: kwds.pop(k) for k in list(kwds) if k in k2a}
 
         if internal is not None:
@@ -671,6 +632,12 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         return cache
 
     @cached_attr
+    def _init_defaults_(self):
+        return self._INIT_DEFAULTS_ | {
+            k: v() if callable(v) else v for k, v in self._INIT_DEFAULTS_.items()
+        }
+
+    @cached_attr
     def f(self):
         return m.F(self.name)
 
@@ -684,11 +651,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
     @cached_attr
     def cache(self):
-        return not not self.select or not (self.fset or self.source)
-
-    @cached_attr
-    def cache(self):
-        return not not self.select or not (self.fset or self.source)
+        return not not self.select or not self.fset
 
     @property
     def json_field_options(self):
@@ -698,7 +661,9 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     def wrap(self) -> bool:
         cast, wrap = self.cast, self._wrap
         if wrap and cast:
-            raise TypeError(f"{self} arguments `wrap=True` and `cast=True` are mutually exclusive.")
+            raise TypeError(
+                f"{self} arguments `wrap=True` and `cast=True` are mutually exclusive."
+            )
         elif wrap is None:
             wrap = not (cast or self.is_json)
         return not not wrap
@@ -710,29 +675,75 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
             return self.json
 
         for cls in self.get_concrete_field_path()[0][::-1]:
-            if isinstance(cls, m.JSONField) or (isinstance(cls, AliasField) and cls.is_json):
+            if isinstance(cls, m.JSONField) or (
+                isinstance(cls, AliasField) and cls.is_json
+            ):
                 return True
 
-    @property
+    def alias_evolve(self, arg=(), **kwds):
+        if isinstance(arg, abc.Mapping):
+            arg = arg.items()
+        k2a, ia = self._KWARGS_TO_ATTRS_, self._init_args_
+        for kv in (
+            ((kv for kv in arg if kv[0] not in kwds), kwds.items()) if kwds else (arg,)
+        ):
+            for k, v in kv:
+                setattr(self, k2a[k], maybe_compose(v)), ia.add(k)
+        return self
+
+    if t.TYPE_CHECKING:
+        alias_evolve: type[Self]
+
+    def annotation(self, expression: _T_Expr):
+        self.alias_evolve(expression=expression)
+        return expression
+
+    def getter(self, fget: t.Callable[[t.Any], _T]):
+        self.alias_evolve(getter=fget)
+        return fget
+
+    def setter(self, fset: t.Callable[[t.Any], _T]):
+        self.alias_evolve(setter=fset)
+        return fset
+
+    def deleter(self, fdel: t.Callable):
+        self.alias_evolve(deleter=fdel)
+        return fdel
+
+    def has_expression(self):
+        return self.expression is not None
+
     @_weak_cached
-    def source(self):
-        src = self._source
-        if isinstance(src, op.Accessor):
-            return src
-        elif isinstance(src, str):
-            return op.Accessor(op.Attr(src))
-        elif isinstance(src, abc.Iterable):
-            return op.Accessor(*src)
-        elif src is not None:
-            raise TypeError(f"`{self!s}.source` expected `str` or `Accessor` but got {type(src)}")
-        if isinstance(expr := self.expression, str):
-            return op.Accessor(op.Attr(expr.replace("__", ".")))
+    def get_expression(self) -> m.expressions.Combinable:
+        expr = self.expression
+        if isinstance(expr, _T_Func):
+            expr = expr()
+        if isinstance(expr, str):
+            expr = m.F(expr)
+
+        return expr
+
+    @_weak_cached
+    def get_annotation(self):
+        expr, internal = self.get_expression(), self.get_internal_field()
+        if expr is not None:
+            cast, coalesce, wrap = self.cast, self.coalesce, self.wrap
+            if wrap and internal:
+                expr = m.ExpressionWrapper(expr, internal)
+            if coalesce is not None:
+                expr = Coalesce(expr, coalesce)
+            if cast and internal:
+                expr = m.functions.Cast(expr, internal)
+        return expr
 
     @_weak_cached
     def get_internal_json_field(self) -> m.JSONField:
         if not self.is_json:
             return
-        internal, (path, part) = self._internal_field_type_, self.get_concrete_field_path()
+        internal, (path, part) = (
+            self._internal_field_type_,
+            self.get_concrete_field_path(),
+        )
         base = m.JSONField
         for field in path[::-1]:
             f_cls = field.__class__
@@ -781,16 +792,22 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         if (cls := self._internal_field_type_) is not None:
             *_, args, kwds = cls.deconstruct(self)
             nulls = self._NULLABLE_INIT_DEFAULTS_
-            for k, v in self._INIT_DEFAULTS_.items():
+            for k, v in self._init_defaults_.items():
                 if k in kwds and (kwds[k] == v or (k in nulls and kwds[k] is None)):
                     kwds.pop(k)
             return cls(*args, **kwds)
 
     def get_concrete_field_path(self) -> tuple[tuple[_T_Field, ...], str | None]:
-        if not isinstance((expr := self.get_expression()), m.F):
+        expr = self.get_expression()
+        if not (hasattr(self, "model") and isinstance(expr, m.F)):
             return (), None
 
-        model, path, field, (seg, _, rem) = self.model, [], None, expr.name.partition("__")
+        model, path, field, (seg, _, rem) = (
+            self.model,
+            [],
+            None,
+            expr.name.partition("__"),
+        )
         while seg:
             try:
                 field = model._meta.get_field(seg)
@@ -814,7 +831,9 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
         return tuple(path), rem or None
 
-    def contribute_to_class(self, cls: type[_T_Model], name: str, private_only: bool = None):
+    def contribute_to_class(
+        self, cls: type[_T_Model], name: str, private_only: bool = None
+    ):
         if private_only is None:
             private_only = cls._meta.proxy
 
@@ -828,20 +847,29 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
             setattr(cls, self.attname, descriptor)
 
     def deconstruct(self):
-        k2a, ia, defaults = self._KWARGS_TO_ATTRS_, self._init_args_, self._INIT_DEFAULTS_
-        (name, path), cls = t.cast(tuple[str, str], super().deconstruct()[:2]), self.__class__
+        k2a, ia, defaults = (
+            self._KWARGS_TO_ATTRS_,
+            self._init_args_,
+            self._init_defaults_,
+        )
+        (name, path), cls = (
+            t.cast(tuple[str, str], super().deconstruct()[:2]),
+            self.__class__,
+        )
 
         nulls = self._NULLABLE_INIT_DEFAULTS_
         args, kwargs = [], {
-            k: v for k in ia if ((v := k2a[k](self)) is None and k in nulls) or v != defaults[k]
+            k: v
+            for k in ia
+            if ((v := getattr(self, k2a[k])) is None and k in nulls) or v != defaults[k]
         }
         if self._internal_field_type_:
             kwargs["internal"] = self.get_deconstructing_internal_field()
 
-        if "source" in kwargs:
-            kwargs["source"] = self.source.deconstruct()[1]
-
-        base, prefix = cls.types._base_, __name__[: __name__.index(".models.fields.") + 8]
+        base, prefix = (
+            cls.types._base_,
+            __name__[: __name__.index(".models.fields.") + 8],
+        )
         path = path.replace(f"{__name__}.", prefix, 1)
         path = re.sub(f"\.{base.__name__}\.types\..+", f".{base.__name__}", path)
         return name, path, args, kwargs
@@ -849,47 +877,22 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
     def check(self, **kwargs):
         return super().check(**kwargs) + [
             *self._check_alias_expression(),
-            *self._check_alias_setter(),
+            *self._check_access_mutators(),
         ]
 
-    def _check_alias_setter(self):
-        source, select, cache, errors = self.source, self.select, self.cache, []
-        if self.fset is True and (not source or select or cache):
-            label = f"{self.__class__.__qualname__}"
-            if select:
+    def _check_access_mutators(self) -> list[checks.Error]:
+        errors, k2a = [], self._KWARGS_TO_ATTRS_
+
+        tp, gt = abc.Callable | None, abc.Callable | bool | None
+        for i, arg in enumerate(("getter", "setter", "deleter"), 2):
+            val, tt = getattr(self, k2a[arg]), gt if arg == "getter" else tp
+            if not isinstance(val, tt):
                 errors += [
                     checks.Error(
-                        f"Select {label} cannot have an implicit setter=True",
-                        hint=(
-                            "Set select=False, use a custom `setter` function, "
-                            "or remove setter=True argument on the field."
-                        ),
+                        f"{arg} argument cannot be of type {val.__class__.__name__}.",
+                        hint=(f"Ensure {arg} argument is of type {tt}."),
                         obj=self,
-                        id="AliasField.E003",
-                    )
-                ]
-            elif cache:
-                errors += [
-                    checks.Error(
-                        f"Cached {label} cannot have an implicit `setter=True. ",
-                        hint=(
-                            "Set cache=False, use a custom `setter` function, "
-                            "or remove setter=True argument on the field."
-                        ),
-                        obj=self,
-                        id="AliasField.E004",
-                    )
-                ]
-            else:
-                errors += [
-                    checks.Error(
-                        f"{label}s with setter=True must have a `source`.",
-                        hint=(
-                            "Explicitly set `source`, use a custom `setter` function, "
-                            "or remove setter=True argument on the field."
-                        ),
-                        obj=self,
-                        id="AliasField.E005",
+                        id=f"AliasField.E{i:03}",
                     )
                 ]
 
@@ -908,7 +911,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
                         f"to create field with `FieldClass` as the internal type."
                     ),
                     obj=self,
-                    id="AliasField.E002",
+                    id="AliasField.E001",
                 )
             ]
         return errors
@@ -918,84 +921,25 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
             return cls(self)
 
     def get_descriptor_class(self):
-        return getattr(self, f"_{'cached' if self.cache else 'dynamic'}_descriptor_class_")
-
-    def alias_evolve(self, arg=(), **kwds):
-        if isinstance(arg, abc.Mapping):
-            arg = arg.items()
-        k2a, ia = self._KWARGS_TO_ATTRS_, self._init_args_
-        for kv in ((kv for kv in arg if kv[0] not in kwds), kwds.items()) if kwds else (arg,):
-            for k, v in kv:
-                k2a[k].set(self, v)
-                ia.add(k)
-        return self
-
-    if t.TYPE_CHECKING:
-        alias_evolve: type[Self]
-
-    def to(self, src: _T_Src) -> _T_Src:
-        return ExpressionBuilder[_T](self)
-
-    def annotation(self, expression: _T_Expr):
-        self.alias_evolve(expression=expression)
-        return expression
-
-    def getter(self, fget: t.Callable[[t.Any], _T]):
-        self.alias_evolve(getter=fget)
-        return fget
-
-    def setter(self, fset: t.Callable[[t.Any], _T]):
-        self.alias_evolve(setter=fset)
-        return fset
-
-    def deleter(self, fdel: t.Callable):
-        self.alias_evolve(deleter=fdel)
-        return fdel
-
-    def has_expression(self):
-        return self.expression is not None
-
-    @_weak_cached
-    def get_expression(self) -> m.expressions.Combinable:
-        expr = self.expression
-        if isinstance(expr, _T_Func):
-            expr = expr()
-        if isinstance(expr, str):
-            expr = m.F(expr)
-
-        return expr
-
-    @_weak_cached
-    def get_annotation(self):
-        expr, internal = self.get_expression(), self.get_internal_field()
-        if expr is not None:
-            cast, coalesce, wrap = self.cast, self.coalesce, self.wrap
-            if wrap and internal:
-                expr = m.ExpressionWrapper(expr, internal)
-            if coalesce is not None:
-                expr = Coalesce(expr, coalesce)
-            if cast and internal:
-                expr = m.functions.Cast(expr, internal)
-        return expr
+        return getattr(
+            self, f"_{'cached' if self.cache else 'dynamic'}_descriptor_class_"
+        )
 
     def get_getter(self):
         fget = self.fget
         if fget in (True, None):
-            if (source := self.source) is not None:
-                fget = source.get
-            else:
-                select, defer, name = self.select, self.defer, self.name
+            select, defer, name = self.select, self.defer, self.name
 
-                def fget(self: _T_Model):
-                    nonlocal name, defer, select
-                    if self._state.adding:
-                        raise AttributeError(name)
-                    qs = self._meta.base_manager.filter(pk=self.pk)
-                    if defer:
-                        qs = qs.alias(name)
-                    if not select:
-                        qs = qs.annotate(name)
-                    return qs.values_list(name, flat=True).get()
+            def fget(self: _T_Model):
+                nonlocal name, defer, select
+                if self._state.adding:
+                    raise AttributeError(name)
+                qs = self._meta.base_manager.filter(pk=self.pk)
+                if defer:
+                    qs = qs.alias(name)
+                if not select:
+                    qs = qs.annotate(name)
+                return qs.values_list(name, flat=True).get()
 
         if fget and self.has_default():
             fget_, field = fget, self
@@ -1005,23 +949,17 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
                 nonlocal field, fget_
                 try:
                     val = fget_(self)
-                except AttributeError:
+                except (AttributeError, LookupError):
                     val = None
                 return field.get_default() if val is None else val
 
         return fget or None
 
     def get_setter(self):
-        source, func = self.source, self.fset
-        if func is True and source:
-            func = source.set
-        return func or None
+        return self.fset
 
     def get_deleter(self):
-        source, func = self.source, self.fdel
-        if func is True and source:
-            func = source.delete
-        return func or None
+        return self.fdel
 
 
 @receiver(m.signals.class_prepared, weak=False)
@@ -1035,7 +973,9 @@ class _Patcher:
 
     @staticmethod
     def model(cls: type[_T_Model]):
-        mro = (b.refresh_from_db for b in cls.__mro__ if "refresh_from_db" in b.__dict__)
+        mro = (
+            b.refresh_from_db for b in cls.__mro__ if "refresh_from_db" in b.__dict__
+        )
         if not all(getattr(b, "_zana_checks_alias_fields_", None) for b in mro):
             orig_refresh_from_db = cls.refresh_from_db
 
@@ -1092,7 +1032,9 @@ class _Patcher:
                 @cached_attr
                 def _initial_annotated_alias_fields_(self: m.Manager[_T_Model]):
                     if aliases := get_alias_fields(self.model):
-                        return {n: a.f for n, a in aliases.selected.items() if not a.defer}
+                        return {
+                            n: a.f for n, a in aliases.selected.items() if not a.defer
+                        }
 
                 _initial_alias_fields_.__set_name__(cls, "_initial_alias_fields_")
                 _initial_annotated_alias_fields_.__set_name__(
@@ -1123,7 +1065,8 @@ class _Patcher:
                                 else None
                             )
                             and n in aliases
-                            and kwds.setdefault(n, (an := m.F(n) if a is n else a)) is an
+                            and kwds.setdefault(n, (an := m.F(n) if a is n else a))
+                            is an
                         )
                     ]
                 return orig_annotate(self, *args, **kwds)
@@ -1182,7 +1125,8 @@ class _Patcher:
                         if arg.default_alias in kwargs:
                             raise ValueError(
                                 "The named annotation '%s' conflicts with the "
-                                "default name for another annotation." % arg.default_alias
+                                "default name for another annotation."
+                                % arg.default_alias
                             )
                     except TypeError:
                         raise TypeError("Complex annotations require an alias")
@@ -1206,17 +1150,13 @@ class _Patcher:
                 for alias, annotation in annotations.items():
                     if alias in names:
                         raise ValueError(
-                            "The annotation '%s' conflicts with a field on " "the model." % alias
+                            "The annotation '%s' conflicts with a field on "
+                            "the model." % alias
                         )
                     if isinstance(annotation, FilteredRelation):
                         clone.query.add_filtered_relation(annotation, alias)
                     else:
-                        clone.query.add_annotation(
-                            annotation,
-                            alias,
-                            is_summary=False,
-                            select=select,
-                        )
+                        clone.query.add_annotation(annotation, alias, select=select)
                 for alias, annotation in clone.query.annotations.items():
                     if alias in annotations and annotation.contains_aggregate:
                         if clone._fields is None:

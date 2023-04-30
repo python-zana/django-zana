@@ -24,6 +24,7 @@ class AuthorAdmin(admin.ModelAdmin):
         "rating",
         "income",
     ]
+    list_filter = ["rating"]
 
 
 @admin.register(Book)
@@ -33,6 +34,23 @@ class BookAdmin(admin.ModelAdmin):
         "title",
         "rating",
         "price",
+    ]
+    fields = [
+        "title",
+        "rating",
+        "price",
+        "num_sold",
+        "gross_income",
+        "authors",
+        "num_pages",
+        "publisher",
+        "published_on",
+        "published_by",
+    ]
+    readonly_fields = [
+        "gross_income",
+        "num_pages",
+        "published_by",
     ]
 
 
