@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "Django-Zana"
-version = "0.3.0a1"
+version = "0.3.0a0"
 description = "A `django` extension for `zana`."
 packages = [
     { include="zana" },
@@ -22,7 +22,7 @@ build-backend = "poetry.core.masonry.api"
 python = ">=3.10,<4.0"
 Django = ">=3.2.0"
 typing-extensions = ">=4.4.0"
-zana = {version = "^0.2.0a3", allow-prereleases = true}
+zana = {version = "^0.2.0a4", allow-prereleases = true}
 
 
 
@@ -72,7 +72,7 @@ log_level = "DEBUG"
 python_files = "tests.py test.py test_*.py"
 python_classes = "test_* Test_*"
 python_functions = "test_* test"
-DJANGO_SETTINGS_MODULE = "example.settings"
+DJANGO_SETTINGS_MODULE = "tests.app.settings"
 
 
 [tool.coverage.report]
