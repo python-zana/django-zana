@@ -156,17 +156,16 @@ WSGI_APPLICATION = "example.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
-DATABASES_BY_VENDOR: dict = env.dict(
-    "DATABASES",
-    {"value": env.db_url_config},
-    {
-        "sqlite": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    },
-)
-
+DATABASES_BY_VENDOR: dict = {
+    # "sqlite": {
+    #     "ENGINE": "django.db.backends.sqlite3",
+    #     "NAME": BASE_DIR / "db.sqlite3",
+    # },
+    "sqlite": env.db_url_config("sqlite:////tmp/test-sqlite.db"),
+    "mysql": env.db_url_config("mysql://root:root@localhost/test_db"),
+    "pgsql": env.db_url_config("postgres://root:root@localhost/test_db"),
+    **env.dict("DATABASES", {"value": env.db_url_config}, {}),
+}
 DATABASE_VENDOR = env("DATABASE_VENDOR") or next(iter(DATABASES_BY_VENDOR))
 DATABASES = dict(default=DATABASES_BY_VENDOR[DATABASE_VENDOR])
 tox_env: str | None = env("TOX_ENV_NAME", default=None)
