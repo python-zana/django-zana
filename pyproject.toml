@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "Django-Zana"
-version = "0.3.0a0"
+version = "0.3.0a1"
 description = "A `django` extension for `zana`."
 packages = [
     { include="zana" },
@@ -48,6 +48,9 @@ pytest-cov = {version = "^4.0.0", extras = ["toml"]}
 pytest-django = "^4.5.2"
 django-polymorphic = "^3.1.0"
 tox = "^4.4.8"
+mysqlclient = "^2.1.1"
+psycopg = "^3.1.8"
+django-environ = "^0.10.0"
 
 
 [tool.poetry.group.docs]
