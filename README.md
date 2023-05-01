@@ -32,8 +32,8 @@ Full documentation is available [here][docs-link].
 [pypi-link]: https://pypi.python.org/pypi/django-zana
 [pyversions-image]: https://img.shields.io/pypi/pyversions/django-zana.svg
 [pyversions-link]: https://pypi.python.org/pypi/django-zana
-[ci-image]: https://github.com/python-zana/django-zana/actions/workflows/workflow.yaml/badge.svg?event=push&branch=main
-[ci-link]: https://github.com/python-zana/django-zana/actions?query=workflow%3ACI%2FCD+event%3Apush+branch%3Amain
-[codecov-image]: https://codecov.io/gh/python-zana/django-zana/branch/main/graph/badge.svg
+[ci-image]: https://github.com/python-zana/django-zana/actions/workflows/workflow.yaml/badge.svg?event=push&branch=master
+[ci-link]: https://github.com/python-zana/django-zana/actions?query=workflow%3ACI%2FCD+event%3Apush+branch%3Amaster
+[codecov-image]: https://codecov.io/gh/python-zana/django-zana/branch/master/graph/badge.svg
 [codecov-link]: https://codecov.io/gh/python-zana/django-zana
 
