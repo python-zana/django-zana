@@ -22,7 +22,8 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: harmon758/postgresql-action@v1
+      - name: Set up PostgreSQL
+        uses: harmon758/postgresql-action@v1
         if: matrix.platform == 'ubuntu-latest'
         with:
             postgresql version: '12.14'
@@ -30,29 +31,22 @@ jobs:
             postgresql password: 'root' 
       - name: Set up MySQL
         if: matrix.platform == 'ubuntu-latest'
-        run: |
-            sudo /etc/init.d/mysql start
-           
+        run: sudo /etc/init.d/mysql start
       - name: Install dependencies
         run: |
             python -m pip install --upgrade pip
             python -m pip install tox tox-gh-actions
-      - name: Test
-        run: tox p
+      - name: Test - run tox
+        run: tox p -- --cov-append --cov-report xml
         env:
             PLATFORM: ${{ matrix.platform }}
             DATABASES: mysql=mysql://root:root@localhost/test_db;pgsql=postgres://root:root@localhost/test_db;sqlite=sqlite:////tmp/test-sqlite.db
-    #   - name: Export Coverage Report
-    #     run: poetry run coverage xml
-    #   - name: Upload code coverage
-    #     uses: codecov/codecov-action@v2.1.0
-    #     with:
-    #       token: ${{ secrets.CODECOV_TOKEN }}
-    #       file: ./coverage.xml
-    #       name: django-zana
-    #       env_vars: OS,PYTHON
-    #       fail_ci_if_error: true
-  
-          
-          
-          
+      - name: Upload code coverage
+        uses: codecov/codecov-action@v2.1.0
+        with:
+            token: ${{ secrets.CODECOV_TOKEN }}
+            file: ./coverage.xml
+            name: django-zana
+            env_vars: OS,PYTHON
+            fail_ci_if_error: true
+            
