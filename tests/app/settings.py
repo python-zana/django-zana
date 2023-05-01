@@ -10,12 +10,19 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
-import os
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+import environ
 
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = (Path(__file__) / "../../../").resolve()
+
+env = environ.Env(
+    DEBUG=(bool, False),
+    DATABASE_VENDOR=(str, None),
+)
+
+environ.Env.read_env(BASE_DIR / ".env")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
@@ -24,7 +31,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = "django-insecure-5trb!_%h&82&2k1&4mx^60g!c__l(8&f1@j)@e2txgrg8ea*c#"
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = env("DEBUG")
 
 ALLOWED_HOSTS = ["*"]
 
@@ -149,15 +156,19 @@ WSGI_APPLICATION = "example.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
-DATABASES = {}
-DATABASE_VENDOR = (os.getenv("DATABASE_VENDOR") or "sqlite").lower().strip()
+DATABASES_BY_VENDOR: dict = env.dict(
+    "DATABASES",
+    {"value": env.db_url_config},
+    {
+        "sqlite": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    },
+)
 
-DATABASES_BY_VENDOR = {
-    "sqlite": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
+DATABASE_VENDOR = env("DATABASE_VENDOR") or next(iter(DATABASES_BY_VENDOR))
+DATABASES = dict(default=DATABASES_BY_VENDOR[DATABASE_VENDOR])
 
 
 # Password validation
@@ -200,12 +211,3 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
-
-try:
-    from .local_settings import *
-except ImportError:
-    pass
-
-
-DATABASES or DATABASES.update(default=DATABASES_BY_VENDOR[DATABASE_VENDOR])
