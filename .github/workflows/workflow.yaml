@@ -42,6 +42,7 @@ jobs:
             PLATFORM: ${{ matrix.platform }}
             DATABASES: mysql=mysql://root:root@localhost/test_db;pgsql=postgres://root:root@localhost/test_db;sqlite=sqlite:////tmp/test-sqlite.db
       - name: Upload code coverage
+        if: matrix.platform == 'ubuntu-latest'
         uses: codecov/codecov-action@v3
         with:
             token: ${{ secrets.CODECOV_TOKEN }}
