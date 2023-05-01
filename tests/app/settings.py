@@ -169,6 +169,12 @@ DATABASES_BY_VENDOR: dict = env.dict(
 
 DATABASE_VENDOR = env("DATABASE_VENDOR") or next(iter(DATABASES_BY_VENDOR))
 DATABASES = dict(default=DATABASES_BY_VENDOR[DATABASE_VENDOR])
+tox_env: str | None = env("TOX_ENV_NAME", default=None)
+if tox_env:
+    for k in DATABASES_BY_VENDOR:
+        tox_env = tox_env.replace(f"-{k}", "")
+    tox_env = tox_env.strip("-_.").replace("--", "-").replace(".", "").replace("-", "_")
+    DATABASES["default"]["NAME"] = f"{DATABASES['default']['NAME']}__{tox_env}"
 
 
 # Password validation
