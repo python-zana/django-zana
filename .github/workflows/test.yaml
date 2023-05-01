@@ -36,7 +36,7 @@ jobs:
             python -m pip install tox tox-gh-actions
       - name: Test
         run: |
-            export DATABASES='mysql=mysql://root:root@localhost/test_db;pgsql=postgres://root:root@localhost/test_db;sqlite=sqlite:////tmp/test-sqlite.db'
+            export DATABASES=mysql=mysql://root:root@localhost/test_db;pgsql=postgres://root:root@localhost/test_db;sqlite=sqlite:////tmp/test-sqlite.db
             tox p
     #   - name: Export Coverage Report
     #     run: poetry run coverage xml
