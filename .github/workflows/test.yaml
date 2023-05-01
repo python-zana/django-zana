@@ -23,7 +23,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: harmon758/postgresql-action@v1
         with:
-            postgresql version: '12.14' 
+            postgresql version: '12.14'
+            postgresql user: 'root' 
+            postgresql password: 'root' 
       - name: Set up MySQL
         run: |
             sudo /etc/init.d/mysql start
