@@ -11,9 +11,10 @@ concurrency:
 jobs:
   test:
     name: Run Tests
-    runs-on:  ubuntu-latest
+    runs-on: ${{ matrix.platform }}
     strategy:
       matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.10', '3.11']
     steps:
       - uses: actions/checkout@v3
@@ -22,11 +23,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: harmon758/postgresql-action@v1
+        if: matrix.platform == 'ubuntu-latest'
         with:
             postgresql version: '12.14'
             postgresql user: 'root' 
             postgresql password: 'root' 
       - name: Set up MySQL
+        if: matrix.platform == 'ubuntu-latest'
         run: |
             sudo /etc/init.d/mysql start
            
@@ -36,6 +39,9 @@ jobs:
             python -m pip install tox tox-gh-actions
       - name: Test
         run: tox p
+        env:
+            PLATFORM: ${{ matrix.platform }}
+            DATABASES: mysql=mysql://root:root@localhost/test_db;pgsql=postgres://root:root@localhost/test_db;sqlite=sqlite:////tmp/test-sqlite.db
     #   - name: Export Coverage Report
     #     run: poetry run coverage xml
     #   - name: Upload code coverage
