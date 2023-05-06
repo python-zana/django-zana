@@ -443,12 +443,17 @@ class ConcreteTypeRegistryType(type):
 
     def _new_class_dict_(self: type[Self], cls: type[_T_Field], nspace: dict):
         by_type, defaults = self._concrete_init_defaults_, self._base_._INIT_DEFAULTS_
-        return nspace | {
+        nspace = {
+            **nspace,
             "_INIT_DEFAULTS_": reduce(
                 or_,
                 [*(by_type[b] for b in cls.__mro__[::-1] if b in by_type), defaults],
-            )
+            ),
         }
+        # if issubclass(cls, m.ForeignKey):
+        #     def get_qu(self):
+        #         pass
+        return nspace
 
 
 class _JSONString(str):
@@ -534,6 +539,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         select=False,
         wrap=None,
         coalesce=False,
+        serialize=False,
         json_options=lambda: dict(encoder=None, decoder=None),
     )
     _NULLABLE_INIT_DEFAULTS_ = {"select", "coalesce", "defer", "json_options"}
@@ -602,6 +608,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         wrap: bool = None,
         coalesce: _T_Expr | bool | None,
         json: bool = False,
+        serialize: bool = False,
         json_options: abc.Mapping[str, t.Any] = None,
         internal: _T_Field = None,
         **kwds,
@@ -801,17 +808,20 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         expr = self.get_expression()
         if not (hasattr(self, "model") and isinstance(expr, m.F)):
             return (), None
-
+        seen = []
         model, path, field, (seg, _, rem) = (
             self.model,
             [],
             None,
             expr.name.partition("__"),
         )
+        oseg = seg
         while seg:
             try:
                 field = model._meta.get_field(seg)
+                seen.append((field.name, field.attname, field))
             except Exception:
+                seen.append(("xXx", "xXx", seg))
                 rem = f"{seg}__{rem}" if rem else seg
                 break
             else:
@@ -828,7 +838,8 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
                     break
                 model = field.related_model
                 seg, _, rem = rem.partition("__")
-
+        logger.info(f"{oseg = } {tuple(path) = }, {rem = }, {seen = } ")
+        # print()
         return tuple(path), rem or None
 
     def contribute_to_class(
@@ -927,6 +938,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
     def get_getter(self):
         fget = self.fget
+        this = self
         if fget in (True, None):
             select, defer, name = self.select, self.defer, self.name
 
@@ -968,15 +980,26 @@ def __on_class_prepared(sender: type[_T_Model], **kwds):
         ImplementsAliases.setup(sender)._alias_fields_.prepare()
 
 
+@receiver(m.signals.post_save, weak=False)
+def __on_object_save(sender: type[_T_Model], instance: _T_Model, created: bool, **kwds):
+    if not created and issubclass(sender, ImplementsAliases):
+        for n in get_alias_fields(instance.__class__).cached:
+            try:
+                delattr(instance, n)
+            except AttributeError:
+                pass
+
+
 class _Patcher:
     """Monkey patch Manager, Queryset and Model classes"""
 
     @staticmethod
     def model(cls: type[_T_Model]):
-        mro = (
-            b.refresh_from_db for b in cls.__mro__ if "refresh_from_db" in b.__dict__
-        )
-        if not all(getattr(b, "_zana_checks_alias_fields_", None) for b in mro):
+        mro = lambda k: (b.__dict__[k] for b in cls.__mro__ if k in b.__dict__)
+        if not all(
+            getattr(b, "_zana_checks_alias_fields_", None)
+            for b in mro("refresh_from_db")
+        ):
             orig_refresh_from_db = cls.refresh_from_db
 
             @wraps(orig_refresh_from_db)

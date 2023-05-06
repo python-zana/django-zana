@@ -36,7 +36,7 @@ DEBUG = env("DEBUG")
 ALLOWED_HOSTS = ["*"]
 
 
-LOG_LEVEL = "INFO"
+LOG_LEVEL = "DEBUG"
 ZANA_LOG_LEVEL = "DEBUG"
 
 LOGGING = {
@@ -87,6 +87,7 @@ LOGGING = {
         "django.db": {
             "handlers": ["console", "mail_admins"],
             "level": LOG_LEVEL,
+            "propagate": True,
         },
         "django.server": {
             "handlers": ["console", "mail_admins"],
@@ -118,8 +119,8 @@ INSTALLED_APPS = [
     "polymorphic",
     "zana.django",
     "tests.app",
-    "example.aliases",
-    "example.xaliases",
+    # "example.aliases",
+    # "example.xaliases",
 ]
 
 MIDDLEWARE = [
@@ -204,7 +205,7 @@ TIME_ZONE = "UTC"
 
 USE_I18N = True
 
-USE_TZ = True
+USE_TZ = False
 
 
 # Static files (CSS, JavaScript, Images)

@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest as pyt
 
 
+def test_coverage():
+    assert True
+
+
 @pyt.fixture(scope="session")
 def tox_env_name():
     tox_env_dir = os.getenv("TOX_ENV_DIR")
