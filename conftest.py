@@ -5,6 +5,7 @@ from logging import getLogger
 import pytest as pyt
 
 from tests import faker
+from zana.django.utils import JsonPrimitive
 
 if t.TYPE_CHECKING:
     from django.db import models as m
@@ -19,9 +20,19 @@ _cov_marker_tests = set()
 
 @pyt.fixture(scope="session")
 def implementations():
-    from tests.app.models import TestModel
+    from tests.app.fields import get_field_data_type
+    from tests.app.models import ExprSource, FieldModel
 
-    return {s: {*imp} for s, imp in TestModel.implemented.items()}
+    meta = FieldModel._meta
+    iall = {*ExprSource}
+    nojson = iall - {ExprSource.JSON}
+
+    return {
+        fld.__class__: {*iall}
+        if issubclass(get_field_data_type(fld.__class__) or object, JsonPrimitive)
+        else {*nojson}
+        for fld in [*meta.fields]
+    }
 
 
 @pyt.fixture(scope="session", autouse=True)
@@ -68,7 +79,7 @@ def fake():
 
 @pyt.fixture()
 def factories():
-    from tests.app.models import FIELD_FACTORIES
+    from tests.app.fields import FIELD_FACTORIES
 
     return FIELD_FACTORIES
 

@@ -1,24 +1,19 @@
 import datetime
-import json
-import sys
 import typing as t
 from base64 import b64encode
 from collections import abc, defaultdict
 from decimal import Decimal
 from enum import auto
-from functools import partial
-from operator import methodcaller
-from pickle import NONE
+from operator import attrgetter
 from types import GenericAlias, SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from typing_extensions import Self
 
-from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models as m
-from django.db.models.fields.related import RelatedField
+from tests.app.fields import get_field_data_type, to_field_name
 from tests.faker import ufake
 from zana.django.models import AliasField
 from zana.django.utils import JsonPrimitive
@@ -31,115 +26,6 @@ _notset = object()
 
 
 T_Func = abc.Callable[..., _T]
-TFactoryDict = dict[type[m.Field], T_Func]
-
-FIELD_FACTORIES = {
-    m.BooleanField: ufake.pybool,
-    m.CharField: ufake.pystr,
-    m.EmailField: ufake.email,
-    m.SlugField: ufake.slug,
-    m.TextField: ufake.text,
-    m.URLField: ufake.url,
-    m.BinaryField: ufake.memoryview,
-    m.GenericIPAddressField: ufake.ipv6,
-    m.DateField: ufake.date_object,
-    m.DateTimeField: ufake.date_time,
-    m.DurationField: ufake.rand_timedelta,
-    m.TimeField: ufake.time_object,
-    m.FilePathField: ufake.file_path,
-    m.DecimalField: ufake.fixed_decimal,
-    m.FloatField: ufake.pyfloat,
-    m.IntegerField: ufake.pyint,
-    m.BigIntegerField: partial(ufake.pyint, int(3e9), int(sys.maxsize * 0.7)),
-    m.PositiveBigIntegerField: partial(ufake.pyint, int(3e9), int(sys.maxsize * 0.7)),
-    m.SmallIntegerField: partial(ufake.pyint, 0, 9999),
-    m.PositiveSmallIntegerField: partial(ufake.pyint, 0, 9999),
-    m.PositiveIntegerField: ufake.pyint,
-    m.UUIDField: partial(ufake.uuid4, cast_to=None),
-    m.JSONField: ufake.json_dict,
-    m.FileField: ufake.file_path,
-    # m.ImageField: lambda:None,
-    m.ForeignKey: lambda: None,
-    m.OneToOneField: lambda: None,
-    m.ManyToManyField: lambda: None,
-}
-
-
-FIELD_DATA_TYPES = {
-    # bool
-    m.BooleanField: bool,
-    # str
-    m.TextField: str,
-    m.CharField: str,
-    m.EmailField: str,
-    m.SlugField: str,
-    m.URLField: str,
-    m.FileField: str,
-    m.FilePathField: str,
-    m.GenericIPAddressField: str,
-    # m.ImageField: str,
-    # bytes
-    m.BinaryField: memoryview,
-    # date types
-    m.DateField: datetime.date,
-    m.DateTimeField: datetime.datetime,
-    m.DurationField: datetime.timedelta,
-    m.TimeField: datetime.time,
-    # number types
-    m.DecimalField: Decimal,
-    m.FloatField: float,
-    m.BigIntegerField: int,
-    m.IntegerField: int,
-    m.PositiveBigIntegerField: int,
-    m.SmallIntegerField: int,
-    m.PositiveSmallIntegerField: int,
-    m.PositiveIntegerField: int,
-    # UUID
-    m.UUIDField: UUID,
-    # JSON
-    m.JSONField: JsonPrimitive,
-    # relation types
-    m.ForeignKey: m.Model,
-    m.OneToOneField: m.Model,
-    m.ManyToManyField: m.QuerySet,
-}
-
-FIELD_TO_JSON_DEFAULTS = defaultdict(
-    str,
-    {
-        m.BinaryField: m.BinaryField().value_to_string,
-    },
-)
-
-
-def get_field_py_type(cls: type[_FT] | str) -> type[_T]:
-    return FIELD_DATA_TYPES.get(TestModel.get_field(cls).__class__)
-
-
-def to_field_name(field: str | type[_FT]) -> type[_FT]:
-    return (field.__name__ if isinstance(field, type) else field).lower()
-
-
-_type_2_id_field_map = {}
-_id_2_type_field_map = {}
-
-
-def field_type_id(field: str | type[_FT]) -> str:
-    if isinstance(field, str):
-        return _type_2_id_field_map[_id_2_type_field_map[field]]
-    elif field in _type_2_id_field_map:
-        return _type_2_id_field_map[field]
-
-    if app := apps.get_containing_app_config(field.__module__):
-        id = f"{app.label}_{field.__name__.lower()}"
-    else:
-        id = f"{field.__name__.lower()}"
-
-    if field is not _id_2_type_field_map.setdefault(id, field):
-        raise TypeError(f"duplicate id {id=}")
-    if id is not _type_2_id_field_map.setdefault(field, id):
-        raise TypeError(f"multiple ids assigned {field=}")
-    return id
 
 
 class ExprSource(m.TextChoices):
@@ -164,7 +50,63 @@ class AbcTestModel(m.Model):
         abstract = True
 
 
-class TestModel(AbcTestModel):
+class FieldModel(AbcTestModel):
+    class Meta:
+        abstract = True
+
+    # bool types
+    booleanfield: bool = m.BooleanField(blank=True, null=True)
+    # str
+    textfield: str = m.TextField(blank=True, null=True)
+    charfield: str = m.CharField(max_length=255, blank=True, null=True)
+    emailfield: str = m.EmailField(blank=True, null=True)
+    slugfield: str = m.SlugField(blank=True, null=True)
+    urlfield: str = m.URLField(blank=True, null=True)
+    filefield: str = m.FileField(blank=True, null=True)
+    filepathfield: str = m.FilePathField(blank=True, null=True)
+    # imagefield: str = m.ImageField(blank=True, null=True)
+
+    # number types
+    decimalfield: Decimal = m.DecimalField(
+        blank=True, null=True, decimal_places=6, max_digits=54
+    )
+    floatfield: float = m.FloatField(blank=True, null=True)
+    bigintegerfield: int = m.BigIntegerField(blank=True, null=True)
+    integerfield: int = m.IntegerField(blank=True, null=True)
+    positivebigintegerfield: int = m.PositiveBigIntegerField(blank=True, null=True)
+    smallintegerfield: int = m.SmallIntegerField(blank=True, null=True)
+    positivesmallintegerfield: int = m.PositiveSmallIntegerField(blank=True, null=True)
+    positiveintegerfield: int = m.PositiveIntegerField(blank=True, null=True)
+    # date types
+    datefield: datetime.date = m.DateField(blank=True, null=True)
+    datetimefield: datetime.datetime = m.DateTimeField(blank=True, null=True)
+    durationfield: datetime.timedelta = m.DurationField(blank=True, null=True)
+    timefield: datetime.time = m.TimeField(blank=True, null=True)
+
+    # Other types
+    binaryfield: memoryview = m.BinaryField(blank=True, null=True)
+    uuidfield: UUID = m.UUIDField(blank=True, null=True)
+    genericipaddressfield: str = m.GenericIPAddressField(blank=True, null=True)
+
+    # json
+    jsonfield: JsonPrimitive = m.JSONField(blank=True, null=True)
+    _rel = dict(to="self", on_delete=m.SET_NULL, blank=True, null=True)
+    foreignkey = m.ForeignKey(**_rel, related_name="foreignkey_reverse")
+    onetoonefield = m.OneToOneField(**_rel, related_name="onetoonefield_reverse")
+    manytomanyfield = m.ManyToManyField("self", blank=True, null=True)
+    del _rel
+    foreignkey_reverse: "m.manager.RelatedManager[Self]"
+    onetoonefield_reverse: Self | None
+
+    json: dict = m.JSONField(default=dict, encoder=JSONEncoder, blank=True, null=True)
+
+
+class PsuedoFieldModel(AbcTestModel):
+    class Meta:
+        abstract = True
+
+
+class TestModel(FieldModel):
     __class_getitem__ = classmethod(GenericAlias)
 
     class Meta:
@@ -181,31 +123,9 @@ class TestModel(AbcTestModel):
     source: t.ClassVar[ExprSource]
     field_type: t.ClassVar[type[m.Field]]
 
+    proxy_value = property(attrgetter("test"))
+
     implemented: t.Final[dict[type[m.Field], set]] = defaultdict(set)
-
-    charfield = m.CharField(max_length=255, null=True)
-    decimalfield = m.DecimalField(decimal_places=6, max_digits=60, null=True)
-
-    foreignkey = m.ForeignKey(
-        "self", m.SET_NULL, null=True, related_name="foreignkey_reverse"
-    )
-    onetoonefield = m.OneToOneField(
-        to="self", on_delete=m.SET_NULL, null=True, related_name="onetoonefield_reverse"
-    )
-    manytomanyfield = m.ManyToManyField("self")
-
-    foreignkey_reverse: "m.manager.RelatedManager[Self]"
-    onetoonefield_reverse: Self | None
-    # manytomanyfield_reverse: "m.manager.RelatedManager[Self]"
-
-    for cls, fn in FIELD_FACTORIES.items():
-        n = field_type_id(cls)
-        implemented[cls].update(tuple(ExprSource))
-        if n not in vars():
-            vars()[n] = cls(null=True)
-    del cls, fn, n
-
-    json = m.JSONField(default=dict, encoder=JSONEncoder, null=True)
 
     def __init_subclass__(cls, **kw):
         super.__init_subclass__(**kw)
@@ -213,6 +133,7 @@ class TestModel(AbcTestModel):
         cls.field_type = tt = dct.get("field_type") or None
         cls.field_name = dct.get("field_name") or (tt and tt.__name__.lower())
         cls.source = dct.get("source")
+        cls.proxy = dct.get("proxy") or cls.proxy_value
 
     @classmethod
     def get_field(cls, name: str | type, default: _DT = _notset) -> m.Field | _DT:
@@ -252,7 +173,7 @@ class TestModel(AbcTestModel):
     def json_value(self) -> _T:
         if self.source is self.JSON:
             val = self.json[self.field_name]
-            typ = get_field_py_type(self.field_type)
+            typ = get_field_data_type(self.field_type)
 
             if not isinstance(val, typ) and not issubclass(typ, JsonPrimitive):
                 val = self._meta.get_field(self.field_name).to_python(val)

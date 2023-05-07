@@ -475,6 +475,9 @@ class ConcreteTypeRegistry(metaclass=ConcreteTypeRegistryType):
             "max_digits": 36,
             "decimal_places": 9,
         },
+        m.ForeignKey: {
+            "on_delete": lambda: m.DO_NOTHING,
+        },
     }
 
 
@@ -808,20 +811,16 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
         expr = self.get_expression()
         if not (hasattr(self, "model") and isinstance(expr, m.F)):
             return (), None
-        seen = []
         model, path, field, (seg, _, rem) = (
             self.model,
             [],
             None,
             expr.name.partition("__"),
         )
-        oseg = seg
         while seg:
             try:
                 field = model._meta.get_field(seg)
-                seen.append((field.name, field.attname, field))
             except Exception:
-                seen.append(("xXx", "xXx", seg))
                 rem = f"{seg}__{rem}" if rem else seg
                 break
             else:
@@ -838,8 +837,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
                     break
                 model = field.related_model
                 seg, _, rem = rem.partition("__")
-        logger.info(f"{oseg = } {tuple(path) = }, {rem = }, {seen = } ")
-        # print()
         return tuple(path), rem or None
 
     def contribute_to_class(
@@ -854,6 +851,7 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
         if descriptor := self.get_descriptor():
             if hasattr(descriptor, "__set_name__"):
+                logger.error(f"{self.name = }, {self.attname = }, {self}")
                 descriptor.__set_name__(cls, self.attname)
             setattr(cls, self.attname, descriptor)
 
@@ -938,7 +936,6 @@ class AliasField(PseudoField, t.Generic[_T_Field, _T]):
 
     def get_getter(self):
         fget = self.fget
-        this = self
         if fget in (True, None):
             select, defer, name = self.select, self.defer, self.name
 

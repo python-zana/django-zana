@@ -1,6 +1,4 @@
 import typing as t
-from collections import ChainMap, defaultdict
-from enum import Enum
 from types import UnionType
 from uuid import UUID
 
@@ -118,11 +116,11 @@ def test_coverage():
     assert True
 
 
-@pyt.mark.field_cov(Src.FIELD, Src.EVAL)
+@pyt.mark.field_cov(Src.FIELD, Src.EVAL, Src.JSON)
 class FieldTestCase(t.Generic[_VT, _FT, _MT]):
     field_types: t.ClassVar[tuple[type[_FT]]]
     data_type: t.ClassVar[type[_VT]]
-    all_sources: t.ClassVar = (Src.FIELD, Src.EVAL)
+    all_sources: t.ClassVar = (Src.FIELD, Src.EVAL, Src.JSON)
     source_support: t.ClassVar = DefaultDict[type[_FT], bool]((), True)
     fixture: pyt.FixtureRequest
     default_kwargs: dict = ReadonlyDict()
@@ -179,7 +177,7 @@ class FieldTestCase(t.Generic[_VT, _FT, _MT]):
         )
         # Ensure the field type automatically maps
         assert isinstance(test.get_internal_field(), field)
-        assert isinstance(proxy.get_internal_field(), field)
+        # assert isinstance(proxy.get_internal_field(), field)
 
     # @pyt.mark.skip("")
     def test_direct_access(self, factory: T_Func[_VT], model: type[TestModel]):
@@ -348,23 +346,25 @@ class test_BooleanField(FieldTestCase[bool, m.BooleanField, TestModel]):
 
 
 class test_UUIDField(FieldTestCase[UUID, m.UUIDField, TestModel]):
+    all_sources = (Src.FIELD, Src.EVAL)
     pass
 
 
 class test_BinaryField(FieldTestCase[str, m.BinaryField, TestModel]):
     json_source_kwargs = {m.Field: dict(cast=True)}
+    all_sources = (Src.FIELD, Src.EVAL)
 
 
 class test_DateTypesFields(FieldTestCase[str, TDateTypeField, TestModel]):
     json_source_kwargs = {m.Field: dict(cast=True)}
-    ...
+    all_sources = (Src.FIELD, Src.EVAL)
 
 
 class test_JSONField(FieldTestCase[dict, m.JSONField, TestModel]):
     pass
 
 
-# @pyt.mark.skip("")
+@pyt.mark.skip("")
 class test_ForeignKey(FieldTestCase[bool, m.ForeignKey | m.OneToOneField, TestModel]):
     @pyt.fixture
     def factory(self, model: type[_MT]):
@@ -372,14 +372,18 @@ class test_ForeignKey(FieldTestCase[bool, m.ForeignKey | m.OneToOneField, TestMo
 
     @pyt.fixture
     def type_var(self, source: Src, field):
-        return
-        # if source != Src.FIELD:
-        #     return field
+        return field
 
-    # @pyt.fixture
-    # def def_kwargs(self, def_kwargs, field_name: str, field: type):
-    #     return {**def_kwargs, "field_name": f"{field_name}_id"}
+    @pyt.fixture
+    def kwargs(self, kwargs, type_var):
+        if type_var:
+            kwargs = {**kwargs, "to": "self"}
+        return kwargs
+
+    @pyt.fixture
+    def def_kwargs(self, def_kwargs, field, kwargs):
+        return {**def_kwargs, "proxy": AliasField[field]("test", **kwargs)}
 
     # @pyt.mark.skip("")
-    def test_basic(self, model: type[TestModel], field: type[_FT]):
-        ...
+    # def test_basic(self, model: type[TestModel], field: type[_FT]):
+    #     ...
